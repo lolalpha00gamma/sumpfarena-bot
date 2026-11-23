@@ -26,7 +26,7 @@
   var MIN_HOLD = 0.35;
   var ARRIVE = 0.8;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v20";
+  var LS_DEATHS = "__SB_deaths_v21";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -55,7 +55,7 @@
   }
 
   var SB = {
-    ver: 20,
+    ver: 21,
     runs: prevRuns,
     deaths: loadDeaths(),
     err: "",
@@ -93,6 +93,7 @@
   var rafId = 0, uiTimer = 0, overlayTimer = 0, stopped = false;
   var lastHud = "", lastHp = 0, lastAttackAt = -9, lastWatchdog = 0, lastKeyRefresh = 0, lastFocus = 0;
   var stuckSince = 0, trail = [], speedHist = [], deathLogged = false, lastAlivePos = null;
+  var antiT = 0, antiX = 0, antiZ = 0;
   var prevPos = null, vel = [0, 0], curDir = 0, holdUntil = 0, lastScoreNum = 0;
   var RING = PLAN.slice();
   var route = [];
@@ -135,8 +136,10 @@
   function visible(el) { return !!(el && el.offsetParent !== null && el.offsetWidth > 0 && el.offsetHeight > 0); }
   function clickEl(el) {
     if (!el || !gw) return;
-    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (type) {
-      el.dispatchEvent(new gw.MouseEvent(type, { bubbles: true, cancelable: true, view: gw }));
+    var cls = (el.className && el.className.toString) ? el.className.toString() : "";
+    if (/powerUpLabel/i.test(cls) || /powerUp/i.test(el.id || "")) return;
+    ["pointerdown", "mousedown", "click"].forEach(function (type) {
+      try { el.dispatchEvent(new gw.MouseEvent(type, { bubbles: true, cancelable: true, view: gw })); } catch (e) {}
     });
   }
   function canvasEl() { return gw && gw.document ? gw.document.querySelector("canvas") : null; }
@@ -247,14 +250,23 @@
     return null;
   }
 
+  function isDoorCell(cx, cz) {
+    return (Math.abs(cx) >= 28.5 && Math.abs(cz) < 4.5) || (Math.abs(cz) >= 28.5 && Math.abs(cx) < 4.5);
+  }
+  function cellAllowed(cx, cz) {
+    if (isDoorCell(cx, cz)) return false;
+    if (Math.abs(cx) >= 28.5 || Math.abs(cz) >= 28.5) return false;
+    return isPb(cx, cz);
+  }
   function rebuildRingFromF() {
-    var live = [], i, c, dropped = 0, lines = [];
+    var live = [], i, c, dropped = 0, lines = [], typ;
     for (i = 0; i < PLAN.length; i++) {
       c = PLAN[i];
-      if (isPb(c[0], c[1])) live.push([c[0], c[1], c[2]]);
+      typ = (k && k.X && typeof gw.F === "function") ? gw.F(k.X, { x: c[0], y: 0, z: c[1] }) : null;
+      if (cellAllowed(c[0], c[1]) && typ === k.X.type.pb) live.push([c[0], c[1], c[2]]);
       else {
         dropped++;
-        lines.push("DROP " + c[0] + "," + c[1] + " " + c[2]);
+        lines.push("DROP " + c[0] + "," + c[1] + " " + c[2] + " F=" + typ);
       }
     }
     if (live.length >= 8) RING = live;
@@ -282,7 +294,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v20 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v21 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -406,18 +418,28 @@
     var onLane = Math.abs(Math.abs(x) - 6) < 1.6 || Math.abs(z - 21) < 1.6;
     return onLane && fireIn < 0.35;
   }
+  function spikeWindowHits(enterEta, leaveEta) {
+    var t = spikeTick();
+    var a = t + Math.max(0, enterEta) * 400;
+    var b = t + Math.max(enterEta, leaveEta) * 400;
+    var w;
+    for (w = Math.floor(a / 1000) * 1000 + 900; w < b; w += 1000) {
+      if (b > w && a < w + 100) return true;
+    }
+    return false;
+  }
   function shouldWaitSpike(px, pz, tx, tz) {
     var c = cellOf(tx, tz);
-    if (!isSpikeCell(c[0], c[1])) return false;
+    if (!isSpikeCell(c[0], c[1]) && !isSpikeCell(cellOf(px, pz)[0], cellOf(px, pz)[1])) return false;
     var dist = Math.hypot(tx - px, tz - pz);
     var eta = dist / 8;
-    var t = spikeTick();
-    var arrive = (t + eta * 400) % 1000;
-    var leave = (t + (eta + 0.4) * 400) % 1000;
-    if (spikesUp()) return true;
-    if (arrive >= 820 && arrive < 1000) return true;
-    if (leave >= 900 && leave < 1000 && arrive < 900) return true;
-    return false;
+    var onPad = isSpikeCell(cellOf(px, pz)[0], cellOf(px, pz)[1]);
+    if (onPad) return spikeWindowHits(0, 0.4) || spikesUp();
+    return spikeWindowHits(eta, eta + 0.4);
+  }
+  function ringCell(i) {
+    if (!RING.length) return [24, 0, "path"];
+    return RING[(((i % RING.length) + RING.length) % RING.length)];
   }
 
   function inRound() {
@@ -561,14 +583,20 @@
     try { if (k && typeof k.Fd === "function") k.Fd(); else key(" ", true, true); } catch (e) {}
     setTimeout(function () { try { key(" ", false, true); SB.attack = false; } catch (e2) {} }, 90);
   }
+  function useZeitklingen() {
+    if (!gw || typeof gw.D !== "function") return;
+    try {
+      if (typeof gw.sa === "function") { gw.sa(); return; }
+    } catch (e) { SB.err = "blade " + ((e && e.message) || e); return; }
+    try {
+      key("Control", true, true);
+      setTimeout(function () { try { key("Control", false, true); } catch (e2) {} }, 80);
+    } catch (e3) {}
+  }
   function maybeUseBlade(px, pz, enemies) {
     if (!k || !k.i || k.i.Rb < 0) return;
-    if (k.i.Rb !== 0 && k.i.Rb !== 1) return;
-    if (enemies.length < 1 || SB.nearest > 5) return;
-    var tg = currentTarget();
-    if (!/spike/.test(tg[2] || "")) return;
-    try { if (typeof gw.sa === "function") gw.sa(); else key("Control", true, true); } catch (e) {}
-    setTimeout(function () { try { key("Control", false, true); } catch (e2) {} }, 80);
+    if (!(SB.nearest <= 2 && k.i.Y <= 2)) return;
+    useZeitklingen();
   }
 
   function classifyDeath(px, pz) {
@@ -669,15 +697,14 @@
     }
     var play = Q(".entry.level_02 .play");
     if (visible(play)) clickEl(play);
-    var pu = Q("button.powerUpLabel") || Q(".powerUpLabel");
-    if (visible(pu) && k && k.i && k.i.Rb >= 0 && k.i.Rb <= 1 && SB.nearest < 5) clickEl(pu);
   }
   function logRun() {
     var score = SB.score, wave = SB.wave, kills = SB.runKills;
     if (score === "?" && wave === "?") return;
     var last = SB.runs[SB.runs.length - 1];
-    if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && last.kills === kills) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, t: Date.now() });
+    var now = Date.now();
+    if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 5000) return;
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 21, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -702,7 +729,7 @@
     lastScoreNum = parseInt(SB.score, 10) || 0;
     deathLogged = false;
     trail = []; speedHist = [];
-    stuckSince = 0; waitUntil = 0; guardUntil = 0; reverseUntil = 0;
+    stuckSince = 0; waitUntil = 0; guardUntil = 0; reverseUntil = 0; antiT = 0;
     loopDir = 1; onRing = false; holdUntil = 0;
     if (k && k.X) runtimeSelfCheck();
     route = pickStartRoute(p.x, p.z);
@@ -714,6 +741,29 @@
     var tgt = route[1] || route[0] || [24, 0];
     var idx = chooseKa(tgt[0] - p.x, tgt[1] - p.z, t0, true);
     holdKa(idx, t0);
+  }
+
+  function tryAltDir(px, pz, tx, tz, t0) {
+    var candidates = [
+      [tx - px, tz - pz],
+      [3, 0], [-3, 0], [0, 3], [0, -3],
+      [3, 3], [3, -3], [-3, 3], [-3, -3]
+    ];
+    var i, dx, dz, len, nx, nz, best = null, bestDot = -1e9, dot, towardX = tx - px, towardZ = tz - pz, tlen;
+    tlen = Math.hypot(towardX, towardZ) || 1;
+    towardX /= tlen; towardZ /= tlen;
+    for (i = 0; i < candidates.length; i++) {
+      dx = candidates[i][0]; dz = candidates[i][1];
+      len = Math.hypot(dx, dz) || 1;
+      nx = px + dx / len * 1.2;
+      nz = pz + dz / len * 1.2;
+      if (!isPb(nx, nz) || !segmentClear(px, pz, nx, nz)) continue;
+      if (!isPb(px + dx / len * 0.6, pz + dz / len * 0.6)) continue;
+      dot = (dx / len) * towardX + (dz / len) * towardZ;
+      if (best == null || dot > bestDot) { bestDot = dot; best = [dx, dz]; }
+    }
+    if (best) holdKa(chooseKa(best[0], best[1], t0, true), t0);
+    return !!best;
   }
 
   function step(t0) {
@@ -749,32 +799,22 @@
     SB.fireballs = fireballCount();
     var here = cellOf(p.x, p.z);
 
-    if (safetyBad(p.x, p.z) || !isPb(p.x, p.z)) guardUntil = t0 + 0.25;
-    if (t0 < guardUntil) {
-      var gx = here[0] - p.x, gz = here[1] - p.z;
-      if (!isPb(here[0], here[1])) {
-        var nbs = neighborsF(p.x, p.z);
-        if (nbs.length) { gx = nbs[0][0] - p.x; gz = nbs[0][1] - p.z; }
-        else { gx = -p.x; gz = -p.z; }
-      }
-      var gidx = chooseKa(gx, gz, t0, true);
-      holdKa(gidx, t0);
-      SB.state = "center";
-      SB.wp = "cell " + here[0] + "," + here[1];
-      prevPos = [p.x, p.z, t0, p.y];
-      return;
-    }
-
     if (!onRing) {
       if (!route.length) { route = pickStartRoute(p.x, p.z); routeI = 0; }
       while (routeI < route.length && Math.hypot(route[routeI][0] - p.x, route[routeI][1] - p.z) < ARRIVE) routeI++;
-      if (routeI >= route.length) {
+      if (routeI >= route.length || (route.length && Math.hypot(route[route.length - 1][0] - p.x, route[route.length - 1][1] - p.z) < 2.2)) {
         onRing = true;
         SB.wi = ringIndexNear(p.x, p.z);
+        SB.state = "loop";
       }
     }
     if (onRing) {
-      var cur = RING[((SB.wi % RING.length) + RING.length) % RING.length];
+      var nearI = ringIndexNear(p.x, p.z);
+      var nearC = ringCell(nearI);
+      if (Math.hypot(nearC[0] - p.x, nearC[1] - p.z) > 2.4) {
+        SB.wi = nearI;
+      }
+      var cur = ringCell(SB.wi);
       if (cur && Math.hypot(cur[0] - p.x, cur[1] - p.z) < ARRIVE) {
         SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
       }
@@ -782,6 +822,26 @@
 
     var tgt = currentTarget();
     var tx = tgt[0], tz = tgt[1];
+
+    if (safetyBad(p.x, p.z) || !isPb(p.x, p.z)) {
+      guardUntil = t0 + 0.2;
+    }
+    if (t0 < guardUntil) {
+      var safeT = onRing ? ringCell(SB.wi) : (route[Math.min(routeI, Math.max(0, route.length - 1))] || [24, 0]);
+      if (onRing && Math.hypot(ringCell(ringIndexNear(p.x, p.z))[0] - p.x, ringCell(ringIndexNear(p.x, p.z))[1] - p.z) < Math.hypot(safeT[0] - p.x, safeT[1] - p.z) + 0.4) {
+        safeT = ringCell(ringIndexNear(p.x, p.z));
+      }
+      tx = safeT[0]; tz = safeT[1];
+      if (!isPb(tx, tz) || !segmentClear(p.x, p.z, p.x + (tx - p.x) * 0.4, p.z + (tz - p.z) * 0.4)) {
+        var nbs = neighborsF(p.x, p.z), ni, bestN = null, bestNd = 1e9, dd;
+        for (ni = 0; ni < nbs.length; ni++) {
+          dd = Math.hypot(nbs[ni][0] - tx, nbs[ni][1] - tz);
+          if (dd < bestNd) { bestNd = dd; bestN = nbs[ni]; }
+        }
+        if (bestN) { tx = bestN[0]; tz = bestN[1]; }
+      }
+      SB.state = onRing ? "loop" : "start";
+    }
 
     if (k && k.i && k.i.Y < k.i.Hb) {
       var bowls = noodles(), bi, bowl, bd, bestB = null, bestBd = 1e9;
@@ -804,6 +864,8 @@
         tgt = currentTarget();
         tx = tgt[0]; tz = tgt[1];
         SB.state = "reverse";
+      } else if (t0 < reverseUntil && onRing) {
+        SB.state = "reverse";
       } else {
         var esc = walkableEscape(p.x, p.z, enemies);
         if (!esc.length) {
@@ -820,27 +882,31 @@
       SB.state = onRing ? "loop" : "start";
     }
 
-    if (shouldWaitSpike(p.x, p.z, tx, tz) || dartThreatAt(tx, tz, Math.hypot(tx - p.x, tz - p.z) / 8)) {
-      waitUntil = t0 + 0.12;
-    }
-    if (t0 < waitUntil) {
-      var hx = here[0] - p.x, hz = here[1] - p.z;
-      SB.state = shouldWaitSpike(p.x, p.z, currentTarget()[0], currentTarget()[1]) ? "wait-spike" : "wait-dart";
-      if (Math.hypot(hx, hz) > 0.2) holdKa(chooseKa(hx, hz, t0, false), t0);
-      else releaseAllKeys();
-      maybeUseBlade(p.x, p.z, enemies);
-      SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + tx + "," + tz + " " + (tgt[2] || "");
-      prevPos = [p.x, p.z, t0, p.y];
-      return;
+    var onPadNow = isSpikeCell(here[0], here[1]);
+    if (onPadNow && (spikesUp() || spikeWindowHits(0, 0.35))) {
+      if (onRing) SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
+      tgt = currentTarget();
+      tx = tgt[0]; tz = tgt[1];
+    } else if (shouldWaitSpike(p.x, p.z, tx, tz) || dartThreatAt(tx, tz, Math.hypot(tx - p.x, tz - p.z) / 8)) {
+      if (onRing) {
+        var back1 = ringCell(SB.wi - loopDir);
+        var back2 = ringCell(SB.wi - 2 * loopDir);
+        var d1 = Math.hypot(back1[0] - p.x, back1[1] - p.z);
+        if (d1 < 0.7) { tx = back2[0]; tz = back2[1]; }
+        else { tx = back1[0]; tz = back1[1]; }
+        SB.state = shouldWaitSpike(p.x, p.z, currentTarget()[0], currentTarget()[1]) ? "time-spike" : "time-dart";
+      }
     }
 
     var vx = tx - p.x, vz = tz - p.z;
-    var nextX = p.x + (vx / (Math.hypot(vx, vz) || 1)) * 0.8;
-    var nextZ = p.z + (vz / (Math.hypot(vx, vz) || 1)) * 0.8;
+    var stepLen = Math.hypot(vx, vz) || 1;
+    var nextX = p.x + (vx / stepLen) * 0.8;
+    var nextZ = p.z + (vz / stepLen) * 0.8;
     if (!isPb(nextX, nextZ) || !segmentClear(p.x, p.z, nextX, nextZ)) {
-      vx = here[0] - p.x;
-      vz = here[1] - p.z;
-      SB.state = "center";
+      var pull = onRing ? ringCell(ringIndexNear(p.x, p.z)) : here;
+      if (!onRing || (isDoorCell(here[0], here[1]) || !isPb(here[0], here[1]))) pull = ringCell(ringIndexNear(p.x, p.z));
+      vx = pull[0] - p.x;
+      vz = pull[1] - p.z;
     }
 
     var idx = chooseKa(vx, vz, t0, false);
@@ -852,20 +918,35 @@
       lastFocus = t0;
       try { var cnv = canvasEl(); if (cnv && cnv.focus) cnv.focus(); } catch (e) {}
     }
-    var moved = prevPos && Math.hypot(p.x - prevPos[0], p.z - prevPos[1]) > 0.05;
-    if (moved && SB.vn >= 1.0) stuckSince = 0;
-    else {
-      if (!stuckSince) stuckSince = t0;
-      if (t0 - stuckSince > 0.5 && t0 - lastWatchdog > 0.3) {
-        lastWatchdog = t0;
-        SB.stuck = 1;
-        focusCanvas();
-        holdUntil = 0;
-        holdKa(chooseKa(tx - p.x, tz - p.z, t0, true), t0);
-      } else SB.stuck = stuckSince && t0 - stuckSince > 0.5 ? 1 : 0;
+
+    var keyHeld = !!(down.ArrowLeft || down.ArrowRight || down.ArrowUp || down.ArrowDown);
+    if (keyHeld) {
+      if (!antiT) { antiT = t0; antiX = p.x; antiZ = p.z; }
+      if (t0 - antiT >= 0.6) {
+        var disp = Math.hypot(p.x - antiX, p.z - antiZ);
+        if (disp < 0.8) {
+          SB.stuck = 1;
+          holdUntil = 0;
+          if (onRing) SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
+          else {
+            routeI++;
+            if (routeI >= route.length) { onRing = true; SB.wi = ringIndexNear(p.x, p.z); SB.state = "loop"; }
+          }
+          var nt = currentTarget();
+          if (!tryAltDir(p.x, p.z, nt[0], nt[1], t0)) {
+            holdKa(chooseKa(nt[0] - p.x, nt[1] - p.z, t0, true), t0);
+          }
+          SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + "unstick " + nt[0] + "," + nt[1];
+        } else SB.stuck = 0;
+        antiT = t0; antiX = p.x; antiZ = p.z;
+      }
+    } else {
+      antiT = 0;
+      SB.stuck = 0;
     }
     prevPos = [p.x, p.z, t0, p.y];
   }
+
 
   function tick() {
     if (stopped) return;
