@@ -344,3 +344,46 @@ Identical trial-for-trial.
 Mean ties. One wave-10 trial died to a medusa (2450 / 43) instead of a shield (2460 / 44); the other five trials match.
 
 v38 is **not worse**: 0 water / 0 spike / 0 arrow on all clocks; 1/60 and 1/40 are identical; hitch mean ties. Stable stays v34 (not re-evaluated here). v38 is the build to test live next for the wave-16 lure-spike fireball death. The wave-14 leftover-axe stall is still open.
+
+
+## v39 (wave-35 protocol, v38 + no lure at HP≤2.5)
+
+v38 live (dump 22:48:09 Europe/Zurich, 23 Nov 2026): one real death at **wave 8 / 1460 / 44**, state `lure-spike`, **enemy/grunt** at (−23.93, −15.01) walking toward R26 (−24, −15). HP 5→0 in 15.8 s: boss on a spike pad, fireball 4→2.5, grunt on a pad 2.5→1.5, then ~12 s still luring on the west plank, two more grunt hits 1.5→0. Wave 8 is 3 snakes, 2 grunts, 1 boss (no medusa), so v38’s orb/medusa lure gate had nothing to veto. Canvas stable, jitter 0.58 s. Full write-up: `sumpfarena-deaths-v38.md`. Live line: v34 w21, v36 w13, v37 w16, v38 w8. The v34 record still stands.
+
+v39 = v38 plus only: no `lure-spike` start/abort when **HP ≤ 2.5**. Broader survival movement, melee-density vetoes, leave-pad, and extra low-HP blade use were tried and withdrawn (new spike/water deaths in sim). Dump key: `__SB_dump_v39`.
+
+Sim: 6 trials, cap 7000 s, targetW=36, same-run vs v37 and v38 (`/tmp/sb-bench39e`). A second 1/60 batch with `SEED_BASE=5000` is the cheap stability check. Official published v37 means from `/tmp/sb-bench37` are unchanged; this keep uses the paired run below (v37 1/60 again drew 11.33).
+
+### 1/60 (seed base 4000)
+
+| Ver | Water | Spike | Arrow | Mean | std | ≥10 | ≥12 | ≥15 | ≥18 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v37 | 0 | 0 | 0 | 11.33 | 3.14 | 4 | 4 | 0 | 0 | 14 |
+| v38 | 0 | 0 | 0 | 11.33 | 3.14 | 4 | 4 | 0 | 0 | 14 |
+| v39 | 0 | 0 | 0 | 11.00 | 2.94 | 4 | 4 | 0 | 0 | 14 |
+
+### 1/40
+
+| Ver | Water | Spike | Arrow | Mean | std | ≥10 | ≥12 | ≥15 | ≥18 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v37 | 0 | 0 | 0 | **14.33** | 2.87 | 5 | 5 | 2 | 1 | **18** |
+| v38 | 0 | 0 | 0 | **14.33** | 2.87 | 5 | 5 | 2 | 1 | **18** |
+| v39 | 0 | 0 | 0 | 13.83 | 2.41 | 5 | 5 | 2 | 0 | 17 |
+
+### Hitch 8%
+
+| Ver | Water | Spike | Arrow | Mean | std | ≥10 | ≥12 | ≥15 | ≥18 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v37 | 0 | 0 | 0 | **13.33** | 3.99 | 5 | 4 | 4 | 0 | 17 |
+| v38 | 0 | 0 | 0 | **13.33** | 3.99 | 5 | 4 | 4 | 0 | 17 |
+| v39 | 0 | 0 | 0 | 12.83 | 4.52 | 4 | 4 | 4 | 0 | 17 |
+
+### Stability (second 1/60, seed base 5000)
+
+| Ver | Water | Spike | Arrow | Mean | std | ≥10 | ≥12 | ≥15 | ≥18 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v37 | 0 | 0 | 0 | 13.33 | 4.31 | 5 | 4 | 2 | 1 | 19 |
+| v38 | 0 | 0 | 0 | 13.33 | 4.31 | 5 | 4 | 2 | 1 | 19 |
+| v39 | 0 | 0 | 0 | **13.50** | 4.54 | 5 | 4 | 2 | 1 | **20** |
+
+v39 is **not clearly worse**: 0 water / 0 spike / 0 arrow on all clocks including the offset-seed batch. Official-clock means are 0.33–0.50 below v37/v38 (well inside trial std ~3); the second 1/60 is 0.17 above (max 20). Combined 1/60 (12 trials) is essentially tied (12.25 vs 12.33). Stable stays v34. v39 is the build to test live next for the wave-8 low-HP lure-into-grunt chain.
