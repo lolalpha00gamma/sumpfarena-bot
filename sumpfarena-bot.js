@@ -1,9 +1,11 @@
 (function () {
   "use strict";
 
-  // v31: v30 keep pr=0.5, dt-aware, watchdog, noodle abort. Conservative
-  // 2.5-radius spike gating (wait / back away) instead of leave-pad through
-  // the neighbouring corner pad. pathSafeTo uses the 2.5 disk.
+  // v34: based on v33. Fixes run counting (i-frame blink was ending "runs"),
+  // death/HP recording independent of deathLogged, one autosave per 10 real
+  // game-overs, tighter blade policy, noodle cooldown so wave-6 bowls are
+  // not a time sink. See sumpfarena-deaths-v33.md.
+
 
   var TOP = window;
   var GEN = (TOP.__SB_GEN || 0) + 1;
@@ -97,8 +99,12 @@
   var MIN_HOLD = 0.35;
   var ARRIVE = 0.55;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v28";
-  var LS_DUMP = "__SB_dump_v28";
+  var VER = "34";
+  var V32_WATER = true;
+  var V32_DODGE = false;
+  var V33_ALL_BLADES = true;
+  var LS_DEATHS = "__SB_deaths_v34";
+  var LS_DUMP = "__SB_dump_v34";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -127,7 +133,7 @@
   }
 
   var SB = {
-    ver: 31,
+    ver: VER,
     gen: GEN,
     bl: 0,
     runs: prevRuns,
@@ -169,6 +175,13 @@
   var waveStartedAt = 0, waveSeen = "";
   var holdUntil = -1, holdState = "", holdDest = null, holdDir = 1;
   var lastMoveT = 0, lastMoveX = null, lastMoveZ = null, noodleSince = 0;
+  var lastBladeUseT = -999, pendingBlade = null;
+  var commitUntil = -1, commitKeys = null, commitStartX = 0, commitStartZ = 0, lastFlipT = -999, lastStabMoveT = -999;
+  var jitterTime = 0, dirFlips = 0, lastJitX = null, lastJitZ = null, lastJitT = 0, prevStabKeys = null;
+  var nowT = 0;
+  SB.bladeUses = [];
+  SB.dirFlips = 0;
+  SB.jitterTime = 0;
   var SPIKE_HIT_R = 2.5, SPIKE_SAFE_R = 3.3;
   var liteApplied = false, liteW = 0, liteH = 0;
 
@@ -249,8 +262,10 @@
 
   var gw = null, k = null, down = {}, overlay = null;
   var rafId = 0, uiTimer = 0, overlayTimer = 0, stopped = false;
-  var lastHud = "", lastHp = 0, lastAttackAt = -9, lastWatchdog = 0, lastKeyRefresh = 0, lastFocus = 0;
+  var lastHud = "", lastHp = 5, lastAttackAt = -9, lastWatchdog = 0, lastKeyRefresh = 0, lastFocus = 0;
   var stuckSince = 0, trail = [], speedHist = [], deathLogged = false, lastAlivePos = null;
+  var spikeWaitKey = "", spikeWaitT = 0, stallSince = 0, stallKills = 0, stallWave = "", lastPersistT = 0, everAlive = false;
+  var lastDownloadN = -1, noodleCoolUntil = 0, lastBladeEndT = -999;
   var antiT = 0, antiX = 0, antiZ = 0;
   var lastSegA = null, lastSegB = null, joinEnd = [24, 0], latKey = null;
   var waterSegCount = {}, sessionBlacklist = {}, runDumped = false, holdYieldUntil = 0;
@@ -401,14 +416,14 @@
     if (kind === "v") {
       if (px <= c[0] - margin) k.ArrowLeft = 0;
       if (px >= c[0] + margin) k.ArrowRight = 0;
-      if (Math.abs(px - c[0]) > 0.12) {
+      if (Math.abs(px - c[0]) > 0.4) {
         if (c[0] > px + 0.08) k.ArrowRight = 1;
         else if (c[0] < px - 0.08) k.ArrowLeft = 1;
       }
     } else {
       if (pz <= c[1] - margin) k.ArrowUp = 0;
       if (pz >= c[1] + margin) k.ArrowDown = 0;
-      if (Math.abs(pz - c[1]) > 0.12) {
+      if (Math.abs(pz - c[1]) > 0.4) {
         if (c[1] > pz + 0.08) k.ArrowDown = 1;
         else if (c[1] < pz - 0.08) k.ArrowUp = 1;
       }
@@ -425,14 +440,14 @@
       axis = px >= 0 ? 24 : -24;
       if (px > axis + 1.12) k.ArrowRight = 0;
       if (px < axis - 1.12) k.ArrowLeft = 0;
-      if (px > axis + 0.12) k.ArrowLeft = 1;
-      if (px < axis - 0.12) k.ArrowRight = 1;
+      if (px > axis + 0.4) k.ArrowLeft = 1;
+      if (px < axis - 0.4) k.ArrowRight = 1;
     } else if (ns < ew && Math.abs(pz) > 18) {
       axis = pz >= 0 ? 24 : -24;
       if (pz > axis + 1.12) k.ArrowDown = 0;
       if (pz < axis - 1.12) k.ArrowUp = 0;
-      if (pz > axis + 0.12) k.ArrowUp = 1;
-      if (pz < axis - 0.12) k.ArrowDown = 1;
+      if (pz > axis + 0.4) k.ArrowUp = 1;
+      if (pz < axis - 0.4) k.ArrowDown = 1;
     }
     return k;
   }
@@ -573,7 +588,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v31 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v" + VER + " sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -638,7 +653,7 @@
       ARROWS.forEach(function (n) { if (want[n]) dispatchKey(n, true); });
     }
   }
-  var CTE_ON = 0.22, CTE_OFF = 0.12;
+  var CTE_ON = 0.5, CTE_OFF = 0.4;
   function projectSeg(px, pz, ax, az, bx, bz) {
     var dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz) || 1;
     var ux = dx / L, uz = dz / L;
@@ -715,11 +730,11 @@
   function keysTowardCenter(px, pz, kind) {
     var k2 = emptyKeys(), c = cellOf(px, pz);
     if (kind === "v") {
-      if (px < c[0] - 0.12) k2.ArrowRight = 1;
-      else if (px > c[0] + 0.12) k2.ArrowLeft = 1;
+      if (px < c[0] - 0.4) k2.ArrowRight = 1;
+      else if (px > c[0] + 0.4) k2.ArrowLeft = 1;
     } else if (kind === "h") {
-      if (pz < c[1] - 0.12) k2.ArrowDown = 1;
-      else if (pz > c[1] + 0.12) k2.ArrowUp = 1;
+      if (pz < c[1] - 0.4) k2.ArrowDown = 1;
+      else if (pz > c[1] + 0.4) k2.ArrowUp = 1;
     }
     return k2;
   }
@@ -780,6 +795,184 @@
     if (keys.ArrowLeft && keys.ArrowRight) { keys.ArrowLeft = 0; keys.ArrowRight = 0; }
     return keys;
   }
+  function keysAreOn(keys) {
+    return !!(keys && (keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight));
+  }
+  function keySignature(keys) {
+    return (keys && keys.ArrowUp ? "U" : "") + (keys && keys.ArrowDown ? "D" : "") +
+      (keys && keys.ArrowLeft ? "L" : "") + (keys && keys.ArrowRight ? "R" : "");
+  }
+  function oppositeKeys(a, b) {
+    if (!a || !b) return false;
+    return (a.ArrowLeft && b.ArrowRight) || (a.ArrowRight && b.ArrowLeft) ||
+      (a.ArrowUp && b.ArrowDown) || (a.ArrowDown && b.ArrowUp);
+  }
+  function emptyStab() { return { ArrowUp: 0, ArrowDown: 0, ArrowLeft: 0, ArrowRight: 0 }; }
+  function stabilizeKeys(keys, t0, px, pz, emergency) {
+    var on = keysAreOn(keys), speed = 99, dtj, disp;
+    if (lastJitX != null && lastJitT > 0) {
+      dtj = t0 - lastJitT;
+      disp = Math.hypot(px - lastJitX, pz - lastJitZ);
+      if (dtj > 0 && dtj < 0.2) {
+        speed = disp / dtj;
+        if (keysAreOn(prevStabKeys) && speed < 0.3) {
+          jitterTime += dtj;
+          SB.jitterTime = jitterTime;
+        }
+      }
+    }
+    lastJitX = px; lastJitZ = pz; lastJitT = t0;
+    // If keys have been held while barely moving for >0.12 s, this is the
+    // live oscillation — release them. Do not commit a MOVE direction.
+    if (!emergency && keysAreOn(prevStabKeys) && on && speed < 0.3 && (t0 - lastStabMoveT) > 0.12) {
+      if (prevStabKeys && oppositeKeys(keys, prevStabKeys)) {
+        dirFlips += 1; SB.dirFlips = dirFlips; lastFlipT = t0;
+      }
+      prevStabKeys = emptyStab();
+      return emptyStab();
+    }
+    if (on && speed >= 0.3) lastStabMoveT = t0;
+    if (prevStabKeys && oppositeKeys(keys, prevStabKeys)) {
+      dirFlips += 1;
+      SB.dirFlips = dirFlips;
+      lastFlipT = t0;
+    }
+    prevStabKeys = keys;
+    return keys;
+  }
+  function inwardKeys(px, pz) {
+    // Only correct overflow PAST the ring (outer water). Never step inward
+    // off a 1-cell plank toward the island moat (that is also water).
+    var k = emptyStab();
+    if (px > 24.2) k.ArrowLeft = 1;
+    else if (px < -24.2) k.ArrowRight = 1;
+    if (pz > 24.2) k.ArrowUp = 1;
+    else if (pz < -24.2) k.ArrowDown = 1;
+    return k;
+  }
+  function offLaneKeys(px, pz) {
+    // Step along the ring, away from x=±6 or z=±6 firing lines.
+    var dest, trial;
+    dest = ringAlong(px, pz, loopDir || 1);
+    trial = axisKeysTo(px, pz, dest.x, dest.z);
+    if (onDartLane(dest.x, dest.z) || dartThreatAt(dest.x, dest.z, 0.2)) {
+      dest = ringAlong(px, pz, -(loopDir || 1));
+      trial = axisKeysTo(px, pz, dest.x, dest.z);
+    }
+    return trial;
+  }
+  function perpDodgeArrow(px, pz) {
+    var n = (k && k.eb && k.eb.active) || 0, i, d, fx, fz, along, side, spd, trial, dest;
+    for (i = 0; i < n; i++) {
+      d = k.eb.array[i];
+      if (!d || !d.position) continue;
+      fx = (d.forward && d.forward.x) || 0;
+      fz = (d.forward && d.forward.z) || 0;
+      spd = d.speed || 20;
+      along = (px - d.position.x) * fx + (pz - d.position.z) * fz;
+      side = (px - d.position.x) * (-fz) + (pz - d.position.z) * fx;
+      if (along > -2 && along < 10 && Math.abs(side) < 2.2) {
+        // Move perpendicular to flight, preferring the along-ring / inward side.
+        dest = ringAlong(px, pz, side >= 0 ? (loopDir || 1) : -(loopDir || 1));
+        trial = axisKeysTo(px, pz, dest.x, dest.z);
+        if (!wouldFallKeys(px, pz, trial, 0.3) && !onDartLane(dest.x, dest.z)) return trial;
+      }
+    }
+    if (onDartLane(px, pz) && dartThreatAt(px, pz, 0.2)) {
+      trial = offLaneKeys(px, pz);
+      if (!wouldFallKeys(px, pz, trial, 0.3)) return trial;
+    }
+    return null;
+  }
+  function v32PostKeys(px, pz, tx, tz, followKeys, t0, enemies) {
+    var k2, bi, b, dB, emergency = false, nx, nz, waterOuter, rec0, rec;
+    nowT = t0;
+    if (SB._dashFace && pendingDash && !greenDashed) {
+      k2 = axisKeysTo(px, pz, px + SB._dashFace.fx * 4, pz + SB._dashFace.fz * 4);
+      if (keysAreOn(k2) && !wouldFallKeys(px, pz, k2, 0.2)) {
+        followKeys = k2;
+        SB.state = "face-dash";
+        emergency = true;
+      }
+    }
+    // Arrow: leave a hot firing line along the ring; never stand in it.
+    // If already off, cancel a step that would enter a hot lane.
+    nx = px; nz = pz;
+    if (followKeys.ArrowRight) nx += 1.2; else if (followKeys.ArrowLeft) nx -= 1.2;
+    if (followKeys.ArrowDown) nz += 1.2; else if (followKeys.ArrowUp) nz -= 1.2;
+    if (onDartLane(px, pz) && dartThreatAt(px, pz, 0.2)) {
+      var leave = ringAlong(px, pz, 1);
+      var lk = leave ? axisKeysTo(px, pz, leave.x, leave.z) : null;
+      if (leave && lk && keysAreOn(lk) && !onDartLane(leave.x, leave.z) && !wouldFallKeys(px, pz, lk, 0.2)) {
+        followKeys = lk;
+        SB.state = "dodge-arrow";
+        emergency = true;
+      } else {
+        leave = ringAlong(px, pz, -1);
+        lk = leave ? axisKeysTo(px, pz, leave.x, leave.z) : null;
+        if (leave && lk && keysAreOn(lk) && !onDartLane(leave.x, leave.z) && !wouldFallKeys(px, pz, lk, 0.2)) {
+          followKeys = lk;
+          SB.state = "dodge-arrow";
+          emergency = true;
+        }
+      }
+    } else if (onDartLane(nx, nz) && dartThreatAt(nx, nz, 0.2)) {
+      followKeys = emptyStab();
+      SB.state = "wait-arrow";
+    }
+    // v33 picks every colour, so never cut the inner diagonal (that walk
+    // falls into the moat). v32 still skirts non-red pads.
+    if (!V33_ALL_BLADES) (visibleBlades() || []).forEach(function (b) {
+      dB = Math.hypot(b.x - px, b.z - pz);
+      if (dB < 2.2 && !wantedBlade(b)) {
+        var sx = b.x >= 0 ? 1 : -1, sz = b.z >= 0 ? 1 : -1;
+        var dx = b.x - 1.8 * sx, dz = b.z - 1.8 * sz;
+        if (isPb(dx, dz) && !isSpikeCell(dx, dz) && nearestSpikePad(dx, dz) >= 2.5) {
+          k2 = axisKeysTo(px, pz, dx, dz);
+          if (keysAreOn(k2) && !wouldFallKeys(px, pz, k2, 0.2)) {
+            followKeys = k2;
+            SB.state = "skirt-blade";
+          }
+        }
+      }
+    });
+    waterOuter = Math.abs(px) > 24.2 || Math.abs(pz) > 24.2;
+    if (V32_WATER && waterOuter) {
+      k2 = inwardKeys(px, pz);
+      if (keysAreOn(k2) && !wouldFallKeys(px, pz, k2, 0.2)) {
+        followKeys = k2;
+        SB.state = "edge-margin";
+        emergency = true;
+      }
+    }
+    if (wouldFallKeys(px, pz, followKeys, 0.2) || wouldFallDt(px, pz, followKeys, recentStepDt(), 0.2)) {
+      rec = keysTowardOuter(px, pz);
+      if (keysAreOn(rec) && !wouldFallKeys(px, pz, rec, 0.2)) {
+        followKeys = rec;
+        SB.state = "recover-ring";
+        emergency = true;
+      } else {
+        followKeys = emptyStab();
+        emergency = true;
+      }
+    }
+    if (bladeEffectActive() && !emergency && !waterOuter && SB.state !== "wait-arrow") {
+      // Don't micro-step during a freeze; STAND unless we are leaving the outer lip.
+    }
+    SB._holdX = tx; SB._holdZ = tz;
+    followKeys = stabilizeKeys(followKeys, t0, px, pz, emergency);
+    if (wouldFallKeys(px, pz, followKeys, 0.2) || wouldFallDt(px, pz, followKeys, recentStepDt(), 0.2)) {
+      rec = keysTowardOuter(px, pz);
+      if (keysAreOn(rec) && !wouldFallKeys(px, pz, rec, 0.2)) {
+        followKeys = rec;
+        SB.state = "recover-ring";
+      } else {
+        followKeys = emptyStab();
+      }
+    }
+    return followKeys;
+  }
+
   function applyFollowKeys(keys, t0) {
     applyGameKeys(keys);
     var labels = [];
@@ -849,13 +1042,21 @@
       side = Math.abs((x - px) * (-fz) + (z - pz) * fx);
       if (along > -2 && along < 8 && side < 2.0) return true;
     }
-    var tick = spikeTick();
-    var fireIn = ((500 - (tick % 1000) + 1000) % 1000) / 400;
-    var onLane =
-      (Math.abs(Math.abs(x) - 6) < 1.6 && z > 18) ||
-      (Math.abs(Math.abs(z) - 6) < 1.6 && x > 18) ||
-      (Math.abs(Math.abs(z) - 6) < 1.6 && x < -18);
-    return onLane && fireIn < 0.35;
+    var tick = spikeTick() % 1000;
+    var fireIn = ((500 - tick + 1000) % 1000) / 400;
+    var sinceFire = tick >= 500 ? (tick - 500) / 400 : 99;
+    var onLane = onDartLane(x, z);
+    // Upcoming fire, or the dart is already in flight across the ring (~0.15 s to impact, 1.55 hit radius).
+    if (onLane && (fireIn < 0.40 + (eta || 0) || sinceFire < 0.40 + (eta || 0))) return true;
+    return false;
+  }
+  function onDartLane(x, z) {
+    return (Math.abs(Math.abs(x) - 6) < 1.8 && z > 18) ||
+      (Math.abs(Math.abs(z) - 6) < 1.8 && Math.abs(x) > 18);
+  }
+  function dartInFlightTick(tick) {
+    tick = tick % 1000;
+    return tick >= 500 && tick < 660;
   }
   function spikeWindowHits(enterEta, leaveEta) {
     var t = spikeTick();
@@ -1007,19 +1208,28 @@
       nearestFireball: +nearestFireball(px, pz).toFixed(2)
     };
     ev.nearestPad = nearestSpikePad(px, pz);
+    ev.onDartLane = onDartLane(px, pz);
     ev.cause = ev.spikeUp && (ev.onSpikePad || ev.nearestPad < SPIKE_HIT_R + 0.4) ? "spike"
-      : (ev.nearestDart < 2.2 ? "dart"
+      : ((ev.nearestDart < 2.5 || (ev.onDartLane && dartInFlightTick(ev.spikeTick))) ? "arrow"
         : (ev.nearestFireball < 2.2 || ev.amount === 1.5 || (ev.nearestEnemy.type === "medusa" && ev.nearestEnemy.dist <= 13 && ev.nearestEnemy.dist > 3.5) ? "fireball"
-          : (ev.nearestEnemy.dist < 4 ? "enemy/" + ev.nearestEnemy.type : "unknown")));
-    SB.hpEvents = (SB.hpEvents || []).concat([ev]).slice(-24);
+          : (ev.nearestEnemy.dist < 4 || (ev.amount >= 2 && ev.nearestEnemy.dist < 5.5 && /axe|boss|shield/.test(ev.nearestEnemy.type || "")) ? "enemy/" + ev.nearestEnemy.type : "unknown")));
+    SB.hpEvents = (SB.hpEvents || []).concat([ev]).slice(-40);
+    try { persistLog(); } catch (eHp) {}
+    if (after <= 3) noodleCoolUntil = 0;
     return ev;
   }
 
+  function isGameOver() {
+    // Real end of a life: death flag or HP gone. Independent of i-frame blink.
+    return !!(k && k.i && (k.i.la || (typeof k.i.Y === "number" && k.i.Y <= 0)));
+  }
   function inRound() {
-    if (!k || !k.i || !k.i.v) return false;
-    if (k.i.la) return false;
+    if (!k || !k.i) return false;
+    if (isGameOver()) return false;
+    // Do NOT use k.i.v.visible — i-frame blink (Oa) toggles the mesh and was
+    // ending runs / firing autosave on every HP chip in v33 live.
     if (k.N && k.N.Ob === false && k.i.Ta) return false;
-    return !!(k.i.v.visible && (k.N && k.N.Ob || k.i.Y > 0));
+    return true;
   }
   function playerPos() { return k && k.i && k.i.v ? k.i.v.position : null; }
   function liveEnemies() {
@@ -1197,15 +1407,51 @@
     try { if (k && typeof k.Fd === "function") k.Fd(); else key(" ", true, true); } catch (e) {}
     setTimeout(function () { try { key(" ", false, true); SB.attack = false; } catch (e2) {} }, 90);
   }
-  function useZeitklingen() {
-    if (!gw || typeof gw.D !== "function") return;
+  function bladeColorName(c) {
+    return c === 0 ? "blue" : c === 1 ? "red" : c === 2 ? "green" : c === 3 ? "yellow" : String(c);
+  }
+  function bladeEffectActive() {
+    try { return !!(k && k.i && k.i.Da); } catch (e) { return false; }
+  }
+  function closeBladeUses() {
+    if (!pendingBlade) return;
+    pendingBlade.kills = Math.max(0, (SB.runKills || 0) - (pendingBlade.killsAt || 0));
+    pendingBlade.ended = nowT;
+    SB.bladeUses = (SB.bladeUses || []).concat([pendingBlade]).slice(-40);
+    pendingBlade = null;
+    lastBladeEndT = nowT;
+  }
+  function useZeitklingen(reason) {
+    if (!k || !k.i || k.i.Rb < 0) return false;
+    // One effect at a time: first press only when idle. Second press is dash/rewind below.
+    if (bladeEffectActive() && !(pendingDash || pendingRewind)) return false;
+    var color = k.i.Rb;
+    var near = [], i, e, pos, nm, d;
+    for (i = 0; i < (liveEnemies() || []).length; i++) {
+      e = liveEnemies()[i];
+      pos = e && e.mesh && e.mesh.position;
+      if (!pos) continue;
+      d = Math.hypot(pos.x - (SB.px || 0), pos.z - (SB.pz || 0));
+      if (d < 10) near.push({ type: enemyName(e), dist: +d.toFixed(2) });
+    }
     try {
-      if (typeof gw.sa === "function") { gw.sa(); return; }
-    } catch (e) { SB.err = "blade " + ((e && e.message) || e); return; }
-    try {
-      key("Control", true, true);
-      setTimeout(function () { try { key("Control", false, true); } catch (e2) {} }, 80);
-    } catch (e3) {}
+      if (typeof gw.sa === "function") gw.sa();
+      else {
+        key("Control", true, true);
+        setTimeout(function () { try { key("Control", false, true); } catch (e2) {} }, 80);
+      }
+    } catch (err) { SB.err = "blade " + ((err && err.message) || err); return false; }
+    if (pendingBlade && pendingBlade.colorId === color && bladeEffectActive()) {
+      pendingBlade.reason = reason || pendingBlade.reason;
+      return true;
+    }
+    closeBladeUses();
+    lastBladeUseT = nowT;
+    pendingBlade = {
+      t: nowT, wave: SB.wave, color: bladeColorName(color), colorId: color,
+      reason: reason || bladeColorName(color), enemies: near, killsAt: SB.runKills || 0, kills: 0, escapes: 0
+    };
+    return true;
   }
   function isFrozen() {
     try { return !!(k && k.i && k.i.va && k.i.Da === k.i.va.stop); } catch (e) { return false; }
@@ -1221,35 +1467,183 @@
     }
     return null;
   }
+  function predictDash(px, pz, fx, fz) {
+    var L = Math.hypot(fx, fz), mx, mz, i, tx, tz, c;
+    if (L < 1e-6) return null;
+    mx = (fx / L) * 7.5; mz = (fz / L) * 7.5;
+    for (i = 0; i < 3; i++) {
+      tx = px + mx; tz = pz + mz;
+      if (isPb(tx, tz)) {
+        c = cellOf(tx, tz);
+        return { x: c[0], z: c[1], fx: fx / L, fz: fz / L, scale: i === 0 ? 7.5 : i === 1 ? 4.95 : 3.27 };
+      }
+      mx *= 0.66; mz *= 0.66;
+    }
+    return null;
+  }
+  function onOuterRingPt(x, z) {
+    return Math.abs(Math.abs(x) - 24) <= 1.0 || Math.abs(Math.abs(z) - 24) <= 1.0;
+  }
+  function dashLandSafe(land) {
+    if (!land || !isPb(land.x, land.z)) return false;
+    if (Math.abs(land.x) > 25.2 || Math.abs(land.z) > 25.2) return false;
+    if (!onOuterRingPt(land.x, land.z)) return false;
+    if (isSpikeCell(land.x, land.z) || inSpikeRadius(land.x, land.z)) return false;
+    if (onDartLane(land.x, land.z) && dartThreatAt(land.x, land.z, 0.25)) return false;
+    return true;
+  }
+  function bestDash(px, pz, enemies, reasonPrefer) {
+    var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    var along = ringAlong(px, pz, loopDir || 1);
+    if (along) dirs.unshift([along.x - px, along.z - pz]);
+    var i, land, best = null, score, threat = 0, ei, epos, ed, fb, ringDist, close;
+    fb = nearestFireball(px, pz);
+    if (fb < 8) threat = Math.max(threat, 8 - fb);
+    for (ei = 0; ei < (enemies || []).length; ei++) {
+      epos = enemies[ei].mesh && enemies[ei].mesh.position;
+      if (!epos) continue;
+      ed = Math.hypot(epos.x - px, epos.z - pz);
+      if (ed < 2.8) threat = Math.max(threat, 3);
+    }
+    for (i = 0; i < dirs.length; i++) {
+      land = predictDash(px, pz, dirs[i][0], dirs[i][1]);
+      if (!dashLandSafe(land)) continue;
+      ringDist = Math.min(Math.abs(Math.abs(land.x) - 24), Math.abs(Math.abs(land.z) - 24));
+      score = -ringDist;
+      if (fb < 8) score += Math.hypot(land.x - px, land.z - pz);
+      close = 99;
+      for (ei = 0; ei < (enemies || []).length; ei++) {
+        epos = enemies[ei].mesh && enemies[ei].mesh.position;
+        if (!epos) continue;
+        ed = Math.hypot(epos.x - land.x, epos.z - land.z);
+        if (ed < close) close = ed;
+      }
+      if (threat && Math.hypot(land.x - px, land.z - pz) > 3) score += 4;
+      if (close > 0.8 && close < 3.2) score += 5; // land next to a kill, not on top
+      if (!best || score > best.score) best = { land: land, score: score, reason: threat ? "green-escape" : "green-close" };
+    }
+    return best;
+  }
+
+  var pendingDash = null, pendingRewind = false, greenDashed = false, yellowArmedHp = 5;
+
   function maybeUseBlade(px, pz, enemies) {
-    if (!k || !k.i || k.i.Rb < 0) return;
+    if (pendingBlade && ((pendingBlade.colorId === 3 && nowT - pendingBlade.t > 9.2) || (pendingBlade.colorId !== 3 && nowT - pendingBlade.t > 6.2) || !bladeEffectActive())) closeBladeUses();
+    if (!k || !k.i) return;
     var color = k.i.Rb;
-    var onTrap = isSpikeCell(px, pz) || /^(time-spike|hold-spike|retreat-spike|time-dart)$/.test(SB.state || "");
+    var mode = k.i.Da || 0;
+    var va = k.i.va || {};
+    var spikeHot = isSpikeCell(px, pz) || inSpikeRadius(px, pz) || spikesUp() || (safeTimeRemaining() < 0.7 && nearestSpikePad(px, pz) < 4);
     var tank = findTank(enemies);
-    var nearDeath = k.i.Y <= 2 && SB.nearest <= 2.4;
-    var d = tank ? Math.hypot(tank.x - px, tank.z - pz) : 99;
-    var trashN = 0, nearestTrash = 99, ti, tpos, tname;
+    var dTank = tank ? Math.hypot(tank.x - px, tank.z - pz) : 99;
+    var nearEn = 0, hard = 0, snakes = 0, ti, tpos, tname, td, orbThreat = false;
     for (ti = 0; ti < (enemies || []).length; ti++) {
       tname = enemyName(enemies[ti]);
-      if (tname === "axe" || tname === "boss" || tname === "boss2") { trashN = 99; break; }
       tpos = enemies[ti].mesh && enemies[ti].mesh.position;
       if (!tpos) continue;
-      trashN++;
-      d = Math.hypot(tpos.x - px, tpos.z - pz);
-      if (d < nearestTrash) nearestTrash = d;
+      td = Math.hypot(tpos.x - px, tpos.z - pz);
+      if (td < 4) nearEn++;
+      if (tname === "snake" && td < 8) snakes++;
+      if ((tname === "axe" || tname === "shield" || tname === "boss" || tname === "boss2") && td < 8) hard++;
+      if (tname === "medusa" && td <= 13) orbThreat = true;
     }
-    var leftoverTrash = trashN >= 1 && trashN <= 2;
-    if (color === 1) {
-      if (nearDeath || (tank && d < 8 && !onTrap) || (tank && d < 10 && !onTrap && SB.state === "hunt-axe") ||
-          (leftoverTrash && nearestTrash < 10 && !onTrap)) useZeitklingen();
+    if (nearestFireball(px, pz) < 8) orbThreat = true;
+    var hp = k.i.Y;
+    var onTrapState = /^(time-spike|hold-spike|retreat-spike|time-dart|wait-pad|back-pad|wait-arrow)$/.test(SB.state || "");
+
+    // Green: second press once a verified landing exists; then resync ring.
+    if (pendingDash && mode === (va.forward || 3)) {
+      if (nowT - pendingDash.t >= 0.12 && !greenDashed) {
+        useZeitklingen(pendingDash.reason || "green-dash");
+        greenDashed = true; SB._dashFace = null;
+        SB.wi = ringIndexNear(px, pz);
+        onRing = true;
+        SB.state = "dash-green";
+        if (pendingBlade) pendingBlade.escapes = (pendingBlade.escapes || 0) + (pendingDash.reason && pendingDash.reason.indexOf("escape") >= 0 ? 1 : 0);
+      }
       return;
     }
-    if (onTrap) return;
-    if (color === 3 || color === 2) { useZeitklingen(); return; }
-    if (color === 0 && tank) { useZeitklingen(); return; }
-    if (color === 0 && leftoverTrash) { useZeitklingen(); return; }
-    if (color === 0 && SB.nearest <= 4 && k.i.Y <= 3) useZeitklingen();
-    if (SB.waveAge > 90 && enemies && enemies.length >= 1 && enemies.length <= 3 && !onTrap && color !== 1) useZeitklingen();
+    // Yellow: rewind on HP loss, fall, or lethal danger, if the saved pose is safe-ish.
+    if (mode === (va.reverse || 4)) {
+      var falling = !!(k.i.Ta);
+      if ((falling || hp < yellowArmedHp || hp <= 1) && !pendingRewind) {
+        pendingRewind = true;
+        useZeitklingen(falling ? "yellow-escape-fall" : "yellow-rewind-hp");
+        SB.wi = ringIndexNear(px, pz);
+        onRing = true;
+        SB.state = "rewind-yellow";
+        if (pendingBlade) pendingBlade.escapes = (pendingBlade.escapes || 0) + 1;
+      }
+      return;
+    }
+
+    if (color < 0 || mode) return; // not holding, or already armed (red/blue tick down)
+    greenDashed = false; pendingDash = null; pendingRewind = false;
+
+    var danger = (hp <= 2 && (nearEn || orbThreat || hard)) || (nearestFireball(px, pz) < 5);
+    var lastUse = (SB.bladeUses || [])[(SB.bladeUses || []).length - 1];
+    var lastPaid = !lastUse || (lastUse.kills || 0) > 0 || (lastUse.escapes || 0) > 0;
+    if (!danger && nowT - lastBladeEndT < 8) return;
+    if (!danger && !lastPaid && nowT - lastBladeEndT < 12) return;
+
+    if (color === 1) { // red freeze — only if we can actually spend the 6 s hitting
+      if (spikeHot || onTrapState) return;
+      if (hp <= 1 && (nearEn || orbThreat || hard)) { useZeitklingen("danger-hp"); return; }
+      if (nearEn && dTank < 5.5) { useZeitklingen("danger-melee"); return; }
+      if (nearEn) { useZeitklingen("danger-melee"); return; }
+      if (hard && dTank < 5.5) { useZeitklingen("advantage-tank"); return; }
+      if (SB.waveAge > 90 && hard && enemies && enemies.length >= 1 && enemies.length <= 4) { useZeitklingen("advantage-stuck"); return; }
+      return;
+    }
+    if (color === 0) { // blue slow
+      if (spikesUp() && (isSpikeCell(px, pz) || inSpikeRadius(px, pz))) return;
+      if (orbThreat) { useZeitklingen("blue-orbs"); return; }
+      if (onDartLane(px, pz) && dartThreatAt(px, pz, 0.4) && (nearestDart(px, pz) < 6 || /arrow|dart|time-dart/.test(SB.state || ""))) { useZeitklingen("blue-darts"); return; }
+      if (snakes >= 3 && nearEn) { useZeitklingen("blue-snakes"); return; }
+      if (SB.waveAge > 90 && enemies && enemies.length >= 2) { useZeitklingen("blue-stuck"); return; }
+      return;
+    }
+    if (color === 2) { // green: verified escape, or a close that lands next to a target
+      if (spikeHot && !orbThreat && nearestFireball(px, pz) >= 6) return;
+      var plan = bestDash(px, pz, enemies);
+      var fbNow = nearestFireball(px, pz);
+      var escapeOk = plan && plan.land && (plan.reason === "green-escape" && (fbNow < 6 || (nearEn && hp <= 3)));
+      var closeOk = plan && plan.land && plan.reason === "green-close" && plan.score >= 5;
+      if (escapeOk || closeOk) {
+        pendingDash = { t: nowT, reason: plan.reason, fx: plan.land.fx, fz: plan.land.fz };
+        useZeitklingen(plan.reason);
+        SB._dashFace = plan.land;
+      }
+      return;
+    }
+    if (color === 3) { // yellow: arm only when a rewind is likely to matter
+      if (nearEn || orbThreat || hard || hp <= 3 || (hp <= 4 && SB.state === "hunt-stall")) {
+        yellowArmedHp = hp;
+        pendingRewind = false;
+        useZeitklingen("yellow-arm");
+      }
+    }
+  }
+  function visibleBlades() {
+    var out = [], i, s, col;
+    try {
+      if (!k || !k.Ib) return out;
+      for (i = 0; i < k.Ib.length; i++) {
+        s = k.Ib[i];
+        col = (s && (s.$a != null ? s.$a : s.sa));
+        if (!s || col == null || col < 0) continue;
+        if (s.Gd) continue;
+        out.push({ x: s.position.x, z: s.position.z, color: col, name: bladeColorName(col) });
+      }
+    } catch (e) {}
+    return out;
+  }
+  function wantedBlade(b) {
+    // Any colour on the ring is a free pickup if hands are empty.
+    if (!b || b.color == null || b.color < 0) return false;
+    if (k && k.i && k.i.Rb >= 0) return false;
+    if (bladeEffectActive()) return false;
+    return true;
   }
 
   function classifyDeath(px, pz) {
@@ -1261,7 +1655,7 @@
     var c = cellOf(px, pz);
     if (reason !== "water" && spikesUp() && isSpikeCell(c[0], c[1])) reason = "spike";
     var nd = nearestDart(px, pz);
-    if (reason !== "water" && nd < 2.2) reason = "dart";
+    if (reason !== "water" && (nd < 2.5 || (onDartLane(px, pz) && dartInFlightTick(spikeTick())))) reason = "arrow";
     var nf = nearestFireball(px, pz);
     if (reason !== "water" && nf < 2.2) reason = "fireball";
     if (reason === "dead" && SB.nearest < 4) reason = "enemy d=" + SB.nearest.toFixed(2);
@@ -1274,19 +1668,25 @@
     return reason;
   }
   function logDeath(reason) {
+    // deathLogged is only a duplicate-record guard, never a reason to skip detection.
     if (deathLogged) return;
-    deathLogged = true;
     var src = lastAlivePos || { x: SB.px, z: SB.pz, y: 0, dx: vel[0], dz: vel[1] };
+    var atOrigin = Math.hypot(+src.x || 0, +src.z || 0) < 2;
+    var bootish = !everAlive && (SB.state === "boot" || SB.state === "wait-spawn" || SB.state === "wait-player" || SB.state === "wait-round");
+    if (bootish || (!everAlive && atOrigin && !(parseInt(SB.score, 10) > 0))) return;
+    deathLogged = true;
     var rec = {
       x: +(+src.x).toFixed(2), z: +(+src.z).toFixed(2), y: +(+src.y || 0).toFixed(2),
       dx: +(src.dx || vel[0] || 0).toFixed(2), dz: +(src.dz || vel[1] || 0).toFixed(2),
       reason: reason || "die", score: SB.score, wave: SB.wave,
       state: SB.state, wp: SB.wp, t: Date.now(),
-      hpEvents: (SB.hpEvents || []).slice(-8)
+      hpEvents: (SB.hpEvents || []).slice(-8),
+      nearest: SB.nearest, enemies: SB.enemies, kills: SB.runKills || 0
     };
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
-    try { console.log("[SB v31 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
+    persistLog();
+    try { console.log("[SB v" + VER + " death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -1322,6 +1722,9 @@
       return (SB.deaths.length - Math.min(SB.deaths.length, 6) + i + 1) +
         ". (" + d.x + "," + d.z + ") " + (d.reason || "") + " " + (d.state || "") + " " + (d.wp || "");
     }).join("\n") || "(keine)";
+    var hits = (SB.hpEvents || []).slice(-5).map(function (e, i, arr) {
+      return (e.hpBefore + "->" + e.hpAfter + " " + (e.cause || "?") + " (" + e.x + "," + e.z + ")");
+    }).join("\n") || "(keine)";
     var html =
       "Sumpf-Arena Bot v" + SB.ver + "\n" +
       "state  " + SB.state + (SB.stuck ? "  STUCK" : "") + (onRing ? "  ring" : "  join") + "\n" +
@@ -1333,12 +1736,14 @@
       "wave   " + SB.wave + "   score " + SB.score + "\n" +
       "near   " + SB.nearest.toFixed(1) + "  enm " + SB.enemies + "  fire " + SB.fireballs + "\n" +
       "atk    " + (SB.attack ? "YES" : "no") + "  blade " + SB.blade + "  tick " + SB.tick.toFixed(0) + "\n" +
+      "blades " + ((SB.bladeUses && SB.bladeUses.length) || 0) + "  flips/min " + (nowT > 1 ? (dirFlips / (nowT / 60)).toFixed(1) : "0") + "  jitter " + jitterTime.toFixed(1) + "s\n" +
       "dt     p50=" + (function () { var st = dtStats(); return (st.p50 * 1000).toFixed(0) + " p95=" + (st.p95 * 1000).toFixed(0) + " max=" + (st.max * 1000).toFixed(0) + "ms  >40=" + st.over40 + "/" + st.frames; })() + "\n" +
       (SB.lite ? "gfx    " + SB.lite + "\n" : "") +
       "bl     " + (SB.bl || 0) + " segs  gen " + GEN + "\n" +
       (SB.sanity ? "map    " + SB.sanity + "\n" : "") +
       (SB.err ? "ERR    " + SB.err + "\n" : "") +
       "--- Läufe ---\n" + runs + "\n" +
+      "--- Treffer ---\n" + hits + "\n" +
       "--- Tode ---\n" + deaths;
     if (html !== lastHud) { lastHud = html; overlay.textContent = html; }
   }
@@ -1353,8 +1758,8 @@
       if (visible(b) && /nochmal/i.test(b.textContent || "")) { again = b; break; }
     }
     if (again) {
-      if (lastHp > 0) logDeath(classifyDeath(SB.px, SB.pz));
-      endRunCapture();
+      if (everAlive) logDeath(classifyDeath(SB.px, SB.pz));
+      endRunCapture(true);
       clickEl(again);
       SB.wave = "1"; SB.score = "0"; SB.state = "restart"; SB.runKills = 0; lastScoreNum = 0;
       route = []; onRing = false;
@@ -1364,20 +1769,22 @@
     if (visible(play)) clickEl(play);
   }
   function logPayload() {
-    return { ver: SB.ver, runs: SB.runs, deaths: SB.deaths, hpEvents: SB.hpEvents || [], dt: dtStats(), lite: SB.lite || "" };
+    return { ver: SB.ver, runs: SB.runs, deaths: SB.deaths, hpEvents: SB.hpEvents || [], dt: dtStats(), lite: SB.lite || "", bladeUses: SB.bladeUses || [], dirFlips: dirFlips, jitterTime: +jitterTime.toFixed(2),
+      current: { score: SB.score, wave: SB.wave, kills: SB.runKills || 0, hp: SB.hp, x: +(+SB.px).toFixed(2), z: +(+SB.pz).toFixed(2), state: SB.state, wp: SB.wp, t: Date.now(), alive: !!everAlive } };
   }
   function persistLog() {
     var json = JSON.stringify(logPayload());
     try { if (TOP.localStorage) TOP.localStorage.setItem(LS_DUMP, json); } catch (e) {}
     TOP.__SB_dump = function () { return JSON.stringify(logPayload()); };
+    try { TOP["__SB_dump_v" + VER] = TOP.__SB_dump; } catch (eD) {}
     SB.dump = TOP.__SB_dump;
   }
   function downloadLog() {
     persistLog();
     try {
       var n = 0, i, r, name, blob, a, doc, url;
-      for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 25) n++; }
-      name = "sumpfarena-v28-log-" + n + ".json";
+      for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && String(r.ver) === String(VER)) n++; }
+      name = "sumpfarena-v" + VER + "-log-" + n + ".json";
       blob = new Blob([JSON.stringify(logPayload())], { type: "application/json" });
       doc = TOP.document;
       a = doc.createElement("a");
@@ -1392,15 +1799,21 @@
   }
   function countVerRuns() {
     var n = 0, i, r;
-    for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 25) n++; }
+    for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && String(r.ver) === String(VER)) n++; }
     return n;
   }
-  function endRunCapture() {
+  function endRunCapture(force) {
+    // Only snapshot a "run" on a real game over (or the Nochmal restart).
+    if (!force && !isGameOver() && !deathLogged) return;
+    if (runDumped) { persistLog(); return; }
     logRun();
     persistLog();
-    if (runDumped) return;
     runDumped = true;
-    if (countVerRuns() % 10 === 0 && countVerRuns() > 0) downloadLog();
+    var n = countVerRuns();
+    if (n > 0 && n % 10 === 0 && n !== lastDownloadN) {
+      lastDownloadN = n;
+      downloadLog();
+    }
   }
   function logRun() {
     var score = SB.score, wave = SB.wave, kills = SB.runKills;
@@ -1408,8 +1821,12 @@
     if (String(wave) === "0") return;
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
+    // Dedup a double-fire of the same game over, not a mid-life HP chip
+    // (those no longer reach this function).
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 8000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 31, t: now });
+    var deathReason = "";
+    if (SB.deaths.length && SB.deaths[SB.deaths.length - 1].t >= now - 4000) deathReason = SB.deaths[SB.deaths.length - 1].reason;
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: VER, t: now, x: +(+((lastAlivePos&&lastAlivePos.x)||SB.px||0)).toFixed(2), z: +(+((lastAlivePos&&lastAlivePos.z)||SB.pz||0)).toFixed(2), state: SB.state, reason: deathReason });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -1431,13 +1848,13 @@
   function onNewRound(t0, p) {
     waveStartedAt = t0; waveSeen = ""; lastFrameT = 0;
     holdUntil = -1; holdState = ""; holdDest = null; holdDir = 1;
-    lastMoveT = t0; lastMoveX = null; lastMoveZ = null; noodleSince = 0;
+    lastMoveT = t0; lastMoveX = null; lastMoveZ = null; noodleSince = 0; noodleCoolUntil = 0; lastBladeEndT = -999;
     SB.rs = t0;
     SB.runKills = 0;
     lastScoreNum = parseInt(SB.score, 10) || 0;
-    deathLogged = false;
+    deathLogged = false; everAlive = true;
     trail = []; speedHist = [];
-    stuckSince = 0; waitUntil = 0; guardUntil = 0; reverseUntil = 0; antiT = 0;
+    stuckSince = 0; spikeWaitKey = ""; spikeWaitT = 0; stallSince = t0; stallKills = 0; stallWave = SB.wave; waitUntil = 0; guardUntil = 0; reverseUntil = 0; antiT = 0;
     loopDir = 1; onRing = false; holdUntil = 0;
     lastSegA = null; lastSegB = null; runDumped = false; holdYieldUntil = 0; latKey = null;
     committed = false; commitExit = -1; shuttleToB = true; seekDirect = false;
@@ -1479,6 +1896,7 @@
   }
 
   function step(t0) {
+    nowT = t0;
     var p = playerPos();
     if (!p) { SB.state = "wait-player"; return; }
     if (!checkedMap && k && k.X) runtimeSelfCheck();
@@ -1490,6 +1908,14 @@
       SB.vn = Math.hypot(vel[0], vel[1]);
     }
     recordTrail(t0, p);
+
+    if (!isPb(p.x, p.z) && Math.hypot(p.x, p.z) < 8 && (p.y == null || p.y > -0.5)) {
+      releaseAllKeys();
+      SB.state = "wait-spawn";
+      prevPos = [p.x, p.z, t0, p.y];
+      return;
+    }
+    everAlive = true;
 
     if (k.i.Ta) {
       if (!deathLogged) logDeath("water");
@@ -1550,6 +1976,22 @@
 
     if (k && k.i && k.i.Y < k.i.Hb) {
       var bowls = noodles(), bi, bowl, bd, bestB = null, bestBd = 1e9;
+      var waveN = parseInt(SB.wave, 10) || 0;
+      var noodleThreat = false, ni, npos, nname, ndist;
+      for (ni = 0; ni < enemies.length; ni++) {
+        nname = enemyName(enemies[ni]);
+        npos = enemies[ni].mesh && enemies[ni].mesh.position;
+        if (!npos) continue;
+        ndist = Math.hypot(npos.x - p.x, npos.z - p.z);
+        if ((nname === "axe" || nname === "shield" || nname === "boss" || nname === "boss2") && ndist < 12) noodleThreat = true;
+        if (ndist < 3.2) noodleThreat = true;
+      }
+      // v33 chased any bowl within 14 whenever HP was not full, and a 3s abort
+      // reset noodleSince so the next frame re-entered — wave-6 time sink, and
+      // the 19:52:10 axe chip happened in state noodle. Heal only when it pays.
+      var wantNoodle = k.i.Y <= 3 || (k.i.Y <= 4 && !noodleThreat && waveN < 13);
+      if (waveN >= 13 && k.i.Y > 2) wantNoodle = false;
+      if (noodleThreat) wantNoodle = k.i.Y <= 2;
       for (bi = 0; bi < bowls.length; bi++) {
         bowl = bowls[bi];
         bd = Math.hypot(bowl.x - p.x, bowl.z - p.z);
@@ -1557,10 +1999,12 @@
           bestBd = bd; bestB = bowl;
         }
       }
-      if (bestB) {
+      if (wantNoodle && bestB && t0 >= noodleCoolUntil) {
         if (SB.state !== "noodle") noodleSince = t0;
-        if (t0 - noodleSince > 3 && Math.hypot(p.x - bestB.x, p.z - bestB.z) > 1.2) {
-          noodleSince = 0; // stale / blocked — fall through to loop
+        if (t0 - noodleSince > 2.5 && Math.hypot(p.x - bestB.x, p.z - bestB.z) > 1.2) {
+          noodleSince = 0;
+          noodleCoolUntil = t0 + 8;
+          if (SB.state === "noodle") SB.state = onRing ? "loop" : "start";
         } else {
           tx = bestB.x; tz = bestB.z; SB.state = "noodle";
         }
@@ -1570,28 +2014,53 @@
       }
     }
 
-    var ahead = enemyAhead(p.x, p.z, tx, tz, enemies, 4);
-    var behind = enemyBehind(p.x, p.z, tx, tz, enemies, 5);
+    var yieldR = V32_DODGE ? 6 : 4;
+    var behindR = V32_DODGE ? 7 : 5;
+    var ahead = enemyAhead(p.x, p.z, tx, tz, enemies, yieldR);
+    var behind = enemyBehind(p.x, p.z, tx, tz, enemies, behindR);
+    var enemyNear = false, eni, eposN;
+    for (eni = 0; eni < enemies.length; eni++) {
+      eposN = enemies[eni].mesh && enemies[eni].mesh.position;
+      if (eposN && Math.hypot(eposN.x - p.x, eposN.z - p.z) < 6.5) enemyNear = true;
+    }
     if (ahead && behind) {
-      var inner = innerSafeCell(p.x, p.z, enemies);
-      if (inner) { tx = inner[0]; tz = inner[1]; SB.state = "yield"; holdYieldUntil = t0 + 0.9; }
-      else { SB.state = "yield"; holdYieldUntil = t0 + 0.5; }
-      if (k && k.i && k.i.Rb >= 0 && k.i.Rb !== 1) useZeitklingen();
+      if (V32_DODGE) {
+        var alongY = ringAlong(p.x, p.z, -(loopDir || 1));
+        tx = alongY.x; tz = alongY.z; seekDirect = true;
+        SB.state = "yield"; holdYieldUntil = t0 + 0.7;
+      } else {
+        var inner = innerSafeCell(p.x, p.z, enemies);
+        if (inner) { tx = inner[0]; tz = inner[1]; SB.state = "yield"; holdYieldUntil = t0 + 0.9; }
+        else { SB.state = "yield"; holdYieldUntil = t0 + 0.5; }
+      }
+      if (k && k.i && k.i.Rb === 1) useZeitklingen("danger-surround");
     } else if (t0 < holdYieldUntil) {
+      if (V32_DODGE) {
+        var alongH = ringAlong(p.x, p.z, -(loopDir || 1));
+        tx = alongH.x; tz = alongH.z; seekDirect = true;
+      }
       SB.state = "yield";
     } else if (ahead) {
       var otherTgt = onRing ? ringCell(SB.wi - loopDir) : [p.x, p.z];
-      var otherAhead = enemyAhead(p.x, p.z, otherTgt[0], otherTgt[1], enemies, 5);
+      var otherAhead = enemyAhead(p.x, p.z, otherTgt[0], otherTgt[1], enemies, behindR);
       if (otherAhead && t0 >= reverseUntil && onRing) {
-        var inner2 = innerSafeCell(p.x, p.z, enemies);
-        if (inner2 && pathSafeTo(p.x, p.z, inner2[0], inner2[1])) {
-          tx = inner2[0]; tz = inner2[1];
-          SB.state = "cut-inner";
+        // Never cut-inner with an enemy nearby (walked off the outer lip in v31 death 14).
+        if (!V32_DODGE) {
+          var inner2 = innerSafeCell(p.x, p.z, enemies);
+          if (inner2 && pathSafeTo(p.x, p.z, inner2[0], inner2[1]) && !enemyNear) {
+            tx = inner2[0]; tz = inner2[1];
+            SB.state = "cut-inner";
+          } else {
+            SB.state = "yield";
+            holdYieldUntil = t0 + 0.5;
+          }
         } else {
+          var alongC = ringAlong(p.x, p.z, -(loopDir || 1));
+          tx = alongC.x; tz = alongC.z; seekDirect = true;
           SB.state = "yield";
-          holdYieldUntil = t0 + 0.5;
+          holdYieldUntil = t0 + 0.7;
         }
-        if (k && k.i && k.i.Rb >= 0 && k.i.Rb !== 1 && k.i.Y <= 3) useZeitklingen();
+        if (k && k.i && k.i.Rb === 1 && k.i.Y <= 1) useZeitklingen("danger-hp");
       } else if (t0 >= reverseUntil && onRing) {
         loopDir *= -1;
         latKey = null;
@@ -1671,6 +2140,26 @@
         } else {
           tx = B[0]; tz = B[1]; seekDirect = true; SB.state = "time-spike";
         }
+        var padKey = String(info.cluster.start) + ":" + String(loopDir);
+        if (padKey !== spikeWaitKey) { spikeWaitKey = padKey; spikeWaitT = t0; }
+        var waited = t0 - spikeWaitT;
+        if (!committed && !info.inside && waited > 5) {
+          // Max wait ~2 spike cycles. Take the next down window with a
+          // tighter margin, or reverse off this pad.
+          if (!spikesUp() && safe >= 0.35) {
+            committed = true; commitExit = info.cluster.exit;
+            SB.state = "force-cross";
+            spikeWaitT = t0;
+          } else if (waited > 8) {
+            loopDir = -(loopDir || 1);
+            reverseUntil = t0 + 2.5;
+            SB.state = "reverse";
+            spikeWaitKey = "";
+            committed = false;
+          }
+        }
+      } else {
+        spikeWaitKey = "";
       }
     }
     if ((SB.state === "loop" || SB.state === "reverse") && dartThreatAt(tx, tz, Math.hypot(tx - p.x, tz - p.z) / 8)) {
@@ -2002,7 +2491,37 @@
         if (safeNow < exitEta2 + 0.12) retreatPad();
       }
     })();
+
+    // Wave stall: no kill and no wave change for >60s → leave the pad dance and hunt leftovers.
+    if (String(SB.wave) !== String(stallWave) || (SB.runKills || 0) !== stallKills) {
+      stallWave = SB.wave; stallKills = SB.runKills || 0; stallSince = t0;
+    }
+    if (stallSince && t0 - stallSince > 60 && enemies && enemies.length) {
+      var hi, hbest = null, hd, hpos, hring;
+      for (hi = 0; hi < enemies.length; hi++) {
+        hpos = enemies[hi].mesh && enemies[hi].mesh.position;
+        if (!hpos) continue;
+        hd = Math.hypot(hpos.x - p.x, hpos.z - p.z);
+        if (!hbest || hd < hbest.d) hbest = { x: hpos.x, z: hpos.z, d: hd };
+      }
+      if (hbest) {
+        loopDir = -(loopDir || 1);
+        reverseUntil = t0 + 3;
+        stallSince = t0 - 20;
+        committed = false;
+        spikeWaitKey = "";
+        SB.state = "hunt-stall";
+        var leave = ringAlong(p.x, p.z, loopDir);
+        if (leave) {
+          tx = leave.x; tz = leave.z;
+          followKeys = axisKeysTo(p.x, p.z, tx, tz);
+          if (wouldFallKeys(p.x, p.z, followKeys, 0.3)) followKeys = emptyK;
+        }
+      }
+    }
+
         followKeys = filterLagKeys(p.x, p.z, followKeys);
+    followKeys = v32PostKeys(p.x, p.z, tx, tz, followKeys, t0, enemies);
     applyFollowKeys(followKeys, t0);
     maybeUseBlade(p.x, p.z, enemies);
     SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + tx.toFixed(0) + "," + tz.toFixed(0) + " " + (tgt[2] || "");
@@ -2059,9 +2578,13 @@
       if (!checkedMap && k && k.X) runtimeSelfCheck();
       syncHud();
       noteWave(t0);
-      var hpNow = SB.hp;
-      if (lastHp > hpNow && lastHp > 0) recordHpLoss(lastHp, hpNow, SB.px, SB.pz, (k && k.ba) ? liveEnemies() : []);
-      if ((lastHp > 0 && hpNow <= 0) || (k.i && k.i.la && !deathLogged)) logDeath(classifyDeath(SB.px, SB.pz));
+      var hpNow = (k && k.i && typeof k.i.Y === "number") ? k.i.Y : SB.hp;
+      // Every HP decrease, every frame, independent of deathLogged.
+      if (typeof lastHp === "number" && typeof hpNow === "number" && hpNow < lastHp - 0.01 && lastHp > 0) {
+        recordHpLoss(lastHp, hpNow, SB.px, SB.pz, (k && k.ba) ? liveEnemies() : []);
+      }
+      var deadNow = isGameOver();
+      if (everAlive && deadNow) logDeath(classifyDeath(SB.px, SB.pz));
       var p = playerPos();
       var running = inRound();
       var atSpawn = p && Math.hypot(p.x, p.z) < 6 && (p.y == null || p.y > -1);
@@ -2069,6 +2592,9 @@
         onNewRound(t0, p);
         SB._alive = true;
       } else if (running && SB._alive !== true && p && !atSpawn) {
+        // Mid-ring resume after a *real* death/restart, not an i-frame blink.
+        deathLogged = false; everAlive = true; runDumped = false;
+        stallSince = t0; stallKills = SB.runKills || 0; stallWave = SB.wave;
         onRing = true;
         SB.wi = ringIndexNear(p.x, p.z);
         SB.state = "loop";
@@ -2078,13 +2604,18 @@
       }
       if (running) SB._alive = true;
       lastHp = hpNow;
-      if (!running) {
-        if (k && k.i && (k.i.la || hpNow <= 0) && !deathLogged) logDeath(classifyDeath(SB.px, SB.pz));
-        if (deathLogged || SB.rs) endRunCapture();
+      if (deadNow) {
+        if (everAlive) logDeath(classifyDeath(SB.px, SB.pz));
+        endRunCapture();
         releaseAllKeys();
         if (SB.state !== "restart" && SB.state !== "falling") SB.state = "wait-round";
         SB._alive = false;
         prevPos = null;
+        return;
+      }
+      if (!running) {
+        releaseAllKeys();
+        if (SB.state !== "restart" && SB.state !== "falling" && SB.state !== "wait-spawn") SB.state = "wait-round";
         return;
       }
       step(t0);
@@ -2117,6 +2648,7 @@
         ensureOverlay();
         renderOverlay();
         try { TOP.document.title = "V" + SB.ver + " " + SB.score + " w" + SB.wave + " " + SB.state + " " + (SB.avg || 0).toFixed(1); } catch (e) {}
+        if (nowT - lastPersistT > 2) { lastPersistT = nowT; persistLog(); }
       } catch (e) {}
     }, 250);
     try { TOP.__SB_TIMERS = { raf: 0, ui: uiTimer, ov: overlayTimer }; } catch (e) {}

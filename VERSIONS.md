@@ -1,6 +1,6 @@
 # Sumpf-Arena bot versions
 
-Injectable bots for the TOGGO Ninjago Sumpf-Arena. Stable loader is always `sumpfarena-bot.js` on `main` (currently **v31**). Variant files on `main` can be loaded independently via the SHA-pinned jsDelivr URLs below. Each variant uses its own HUD version string, dump key (`__SB_dump_v32.x`), and download filename (`sumpfarena-v32.x-log-…`) so live logs never mix.
+Injectable bots for the TOGGO Ninjago Sumpf-Arena. Stable loader is always `sumpfarena-bot.js` on `main` (currently **v34**, after the 23 Nov 2026 live session reached wave 21). v35 is published for testing but did not beat v34 in sim, so it is not stable. Variant files on `main` can be loaded independently via the SHA-pinned jsDelivr URLs below. Each variant uses its own HUD version string, dump key (`__SB_dump_v32.x`), and download filename (`sumpfarena-v32.x-log-…`) so live logs never mix.
 
 Sim protocol (all numbers below): 11 trials, cap 2400 s, target wave 13, seeds `4000+i*97`. Clocks: `1/60`, `1/40`, and hitch 8% (40–100 ms). v31 spike gating (2.5 disk, CROSS=0.70) is unchanged in every v32 variant.
 
@@ -14,6 +14,7 @@ Sim protocol (all numbers below): 11 trials, cap 2400 s, target wave 13, seeds `
 | v32.3 | `v32.3` | Both: water-edge margin and earlier enemy dodging, plus all shared v32 fixes. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.3.js` |
 | v33 | `main` (file `sumpfarena-bot-v33.js`) | Built on v32.1. Uses every Zeitklinge colour deliberately (see `sumpfarena-blades.md`). Fixes v32.1 live bugs: death recording, dump heartbeat, spike-gating livelock, stall hunting. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@f75f573ad292205a4053a0811267ead4e1572c72/sumpfarena-bot-v33.js` |
 | v34 | `main` (file `sumpfarena-bot-v34.js`) | Built on v33. Real game-over run counting (i-frame blink no longer opens a “run”), HP/death recording each frame, one autosave per 10 real game-overs, tighter blade policy, noodle cooldown. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@69863f79e62a97188fbb28fab6fc992ef0b3fa02/sumpfarena-bot-v34.js` |
+| v35 | `main` (file `sumpfarena-bot-v35.js`) | Built on v34. Wave 19–35 support: null `'22'` / WebGL-loss recovery, full per-run reset, capped logs, hold-spike max-wait that does not depend on padKey, dodge-orb that refuses an axe’s reach, no lure-spike into fireballs, outward recover-ring instead of stay-ring cuts. | `PINNED_AFTER_PUSH` |
 
 The v32 files on `main` are at commit `97d04b89a1d6c9020fa617a9e9a7823d4e334788`.
 
@@ -170,3 +171,56 @@ v34 beats v31 on mean and has 0 arrow (v31 had 1) and much fewer blades, but is 
 v34 is far ahead on mean (all six trials ≥12, three ≥15, max 16) but has **1 water** at (−22.5, 8.7) wave 12, HP 3.5 — inward of the west plank, not a corner lip. Because of that safety regression, **stable stays v31** even though v34 has the higher mean on all three clocks. Wave 18 is still unreached; leftover axes and medusa orbs in 13–17 plus stall time remain the wall.
 
 **Recommend testing live next: v34** (own dump key `__SB_dump_v34`). The logging/run-count/autosave fixes and the tighter blades/noodle policy are the point of this build; watch hitch water and whether blades/wave stay low.
+
+## v34 live (20:00–21:03 CET, 23 Nov 2026) and stable pointer
+
+Full write-up: `sumpfarena-deaths-v34.md`. Logs: `/home/box/Downloads/sumpfarena-v34-log-final.json` (20:35:58 CET, alive wave 17/4530), `…-final2.json` (20:43:30 CET, alive wave 20/5750/199 kills), `…-final3.json` (21:03:20 CET).
+
+The first life reached **wave 21 / 6040 / 206 kills** and died at 20:44:00 CET to an **axe in `dodge-orb`** at (23.49, −17.32) — one wave past the “still alive on 20” dump. Two shorter lives followed (wave 7 fireball in `lure-spike`; wave 6 water / last chip axe in `stay-ring` after a knock inward of the south plank). The WebGL context had been lost ~20:16 (canvas black, HUD `ERR Cannot read properties of null (reading '22')`); logic kept running but jitter grew 1.1 → 2.4–3.1 s, and the bot sat in **hold-spike at speed 0 for ~3 min** at the start of run 3 (20:54–20:57, wave 1).
+
+Because v34 actually reached wave 21 live, **`sumpfarena-bot.js` on `main` is now v34** (same blob as `sumpfarena-bot-v34.js`, dump key `__SB_dump_v34`). The earlier hitch-8% water in sim is still a known risk, but the live result outweighs keeping v31 as the stable pointer.
+
+## v35 (wave-35 protocol)
+
+Goal: WAVE 35. Sim protocol for this section: **6 trials**, cap **7000 s**, **targetW=36**, clocks 1/60, 1/40, hitch 8%. Wave table (`$a` in `app.beautified.js`): waves 19–30 are scripted (19 = 9 snakes + 3 axes; 20/24/27/30 = heavy medusa + bosses; 22 = 8 shields; 25/28 = 5 axes). Waves 31+ remap the *composition* only: `30 < b && (b = parseInt(26 + 4 * Math.random()))` rolls a 26–29 row, never wave 30’s row; the HUD wave `Xb` is unchanged. From wave 26, enemy `dt` is scaled by `min(Xb/25, 1.5)` (wave 35 → 1.40×; cap 1.50× at wave 38+). Player, fireballs, traps, noodles and blade pads are **not** scaled.
+
+v35 live-session fixes (see `sumpfarena-deaths-v34.md`):
+
+- **`'22'` / WebGL:** `F()` indexes `k.X.data[ix][iy]`; `data` starts `null` in `va()` until the map loads, and index 22 is the mid-plank. Uncaught `F()` in `runtimeSelfCheck` / `rebuildRingFromF` / `isPb` set `SB.err` and skipped `step()`, or made every cell look unwalkable. v35 guards `mapType`/`isPb` (geometric outer-ring fallback when the grid is missing), hooks `webglcontextlost` with `preventDefault`, skips `setSize` while lost, restores on `webglcontextrestored`, and never lets a map error abort `onNewRound`.
+- **Full per-run reset:** `resetRunState` clears jitter/flips, spike waits, `spikeStuckSince`, pending blades, committed crossings, noodle cooldowns, and `hpEvents` on every new life **and** on mid-ring resume. Session log arrays are capped (~80 events) and persisted every 4 s.
+- **hold-spike max-wait:** an independent `spikeStuckSince` timer (does not reset when `padKey` flickers). After 5 s standing in `hold-spike`/`wait-pad` (or a moving spike state with `avg < 0.4`) and not `committed`, force-cross when the pad is down and `safe ≥ 0.30`, or reverse after 8 s.
+- **dodge-orb** scores both ring directions, refuses a step that is off-ring / `wouldFall`, and penalizes landing within axe/boss 3.5 or shield/grunt 2.2; requires score > 0.5.
+- **lure-spike** is not entered (and is aborted) when a fireball is present or nearer than 8.
+- **Off-ring recover:** if already inward of the plank, `recover-ring` / `keysTowardOuter` instead of `stay-ring` cutting the inner moat.
+- Blade policy: prefer blue for orbs (`blue-orbs`, no empty `blue-darts`); `red-boss` when a boss is < 6 with orbs/melee; yellow only if already hurt so the hand is not blocked at full HP.
+
+Dump key: `__SB_dump_v35`. Filename: `sumpfarena-v35-log-…`.
+
+### 1/60 (6 trials, cap 7000, targetW=36)
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | B/wave | K/blade | Stall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| v34 | 0 | 0 | 0 | **10.83** | **4** | **2** | **1** | 0 | 0 | 0 | 1.95 | 0.35 | 6040s/41 |
+| v35 | 0 | 0 | 0 | 8.67 | 2 | 2 | 0 | 0 | 0 | 0 | 0.96 | **0.54** | 3089s/22 |
+
+v34 causes: axe 3, medusa 2, grunt 1; max 17. v35 causes: axe 2, fireball 1, grunt 1, medusa 1, shield 1; max 14.
+
+### 1/40
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | B/wave | K/blade | Stall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| v34 | 0 | 0 | 0 | **9.17** | **2** | **2** | **1** | 0 | 0 | 0 | 1.16 | **0.58** | 3306s/29 |
+| v35 | 0 | **2** | 0 | 8.00 | 1 | 1 | 0 | 0 | 0 | 0 | 0.81 | 0.49 | 2378s/16 |
+
+v34 causes: axe 2, medusa 2, grunt 1, boss 1; max 15. v35 causes: fireball 2, spike 2, shield 1, axe 1; max 12. The two spike deaths (waves 4 and 9, south-east pad) are a safety regression in this clock.
+
+### Hitch 8%
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | B/wave | K/blade | Stall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| v34 | **1** | 0 | 0 | **14.67** | **6** | **6** | **3** | 0 | 0 | 0 | 1.92 | **0.50** | 5111s/53 |
+| v35 | 0 | 0 | 0 | 8.00 | 1 | 1 | 0 | 0 | 0 | 0 | 0.73 | 0.43 | 4978s/25 |
+
+v34 still has the known hitch water at (−22.5, 8.7) wave 12, but every trial reached ≥12 (max 16). v35 cleared water on this clock (and on the other two) but dropped hard on mean (max 12). Neither build reached ≥18 in sim — the live v34 wave-21 life is well ahead of the sim wall.
+
+**v35 does not beat v34** on mean or ≥12/≥15 on any clock, and it adds two spike deaths at 1/40. Stable therefore stays **v34**. v35 is still the build to test live next if the goal is surviving a lost WebGL context, not freezing in hold-spike after a death, and avoiding the three v34 live death modes (dodge-orb into an axe, lure-spike into a fireball, stay-ring into the moat). Watch 1/40 spike crossings and whether the more conservative blade/dodge policy costs early waves.
