@@ -1,6 +1,11 @@
 (function () {
   "use strict";
 
+  // v29: v27 + safe v28 (leave-pad, abort-plank, spike HP attrib) +
+  // lower renderer pixel ratio / no shadows, 4 Hz overlay, no hp console
+  // spam, dt p50/p95/max logged, controller uses measured p95 dt (game
+  // clamps k.delta to 0.1, then pos += v*dt with Ah=8).
+
   var TOP = window;
   var GEN = (TOP.__SB_GEN || 0) + 1;
   try { TOP.__SB_GEN = GEN; } catch (e) {}
@@ -93,8 +98,8 @@
   var MIN_HOLD = 0.35;
   var ARRIVE = 0.55;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v27";
-  var LS_DUMP = "__SB_dump_v27";
+  var LS_DEATHS = "__SB_deaths_v28";
+  var LS_DUMP = "__SB_dump_v28";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -123,7 +128,7 @@
   }
 
   var SB = {
-    ver: 27,
+    ver: 29,
     gen: GEN,
     bl: 0,
     runs: prevRuns,
@@ -157,6 +162,88 @@
     pk: [],
     stop: stop
   };
+
+  var DT_NMAX = 120; // dump uses 120; steering uses last 8
+  var dtBuf = new Float64Array(DT_NMAX);
+  var dtCount = 0, dtIdx = 0, dtOver40 = 0, dtMaxSeen = 0, lastFrameT = 0;
+  var lastP50 = 1 / 60, lastP95 = 1 / 60;
+  var waveStartedAt = 0, waveSeen = "";
+  var holdUntil = -1, holdState = "", holdDest = null, holdDir = 1;
+  var liteApplied = false, liteW = 0, liteH = 0;
+
+  function noteFrameDt(t0) {
+    if (lastFrameT > 0) {
+      var dt = t0 - lastFrameT;
+      if (dt > 0 && dt < 2) {
+        dtBuf[dtIdx % DT_NMAX] = dt;
+        dtIdx++;
+        if (dtCount < DT_NMAX) dtCount++;
+        if (dt > 0.04) dtOver40++;
+        if (dt > dtMaxSeen) dtMaxSeen = dt;
+      }
+    }
+    lastFrameT = t0;
+  }
+  function dtStats() {
+    var i, tmp = [], p50 = 1 / 60, p95 = 1 / 60, mx = 0;
+    for (i = 0; i < dtCount; i++) tmp.push(dtBuf[i]);
+    if (tmp.length) {
+      tmp.sort(function (a, b) { return a - b; });
+      p50 = tmp[Math.min(tmp.length - 1, Math.floor(0.50 * tmp.length))];
+      p95 = tmp[Math.min(tmp.length - 1, Math.floor(0.95 * tmp.length))];
+      mx = tmp[tmp.length - 1];
+    }
+    lastP50 = p50;
+    lastP95 = p95;
+    return { p50: +p50.toFixed(4), p95: +p95.toFixed(4), max: +Math.max(mx, dtMaxSeen).toFixed(4), over40: dtOver40, n: dtCount, frames: dtIdx };
+  }
+  function recentStepDt() {
+    // Game: k.delta = THREE.Math.clamp(k.Nb.getDelta(), 1e-5, 0.1).
+    // Movement in k.te: pos += dir * Ah * dt (Ah=8). No further clamp.
+    // Steering uses max of the last 8 frames so an isolated hitch only
+    // tightens the next few steps; the dump still reports p50/p95/max of 120.
+    var n = Math.min(dtCount, 8), i, mx = 1 / 60, idx, v;
+    if (n < 1) return 1 / 60;
+    for (i = 1; i <= n; i++) {
+      idx = (dtIdx - i + DT_NMAX) % DT_NMAX;
+      v = dtBuf[idx];
+      if (v > mx) mx = v;
+    }
+    return Math.min(0.1, Math.max(1 / 60, mx));
+  }
+  function noteWave(t0) {
+    if (SB.wave !== waveSeen) { waveSeen = SB.wave; waveStartedAt = t0; }
+    SB.waveAge = waveStartedAt ? (t0 - waveStartedAt) : 0;
+  }
+  function lightenRenderer() {
+    try {
+      if (!k || !k.renderer) return;
+      var r = k.renderer;
+      var win = gw || window;
+      var w = win.innerWidth || window.innerWidth;
+      var h = win.innerHeight || window.innerHeight;
+      if (liteApplied && w === liteW && h === liteH) return;
+      liteW = w;
+      liteH = h;
+      if (r.setPixelRatio) r.setPixelRatio(0.5);
+      if (r.setSize) r.setSize(w, h, true);
+      if (r.domElement && r.domElement.style) {
+        r.domElement.style.width = w + "px";
+        r.domElement.style.height = h + "px";
+      }
+      if (r.shadowMap) {
+        if (r.shadowMap.enabled != null) r.shadowMap.enabled = false;
+        if (r.shadowMap.autoUpdate != null) r.shadowMap.autoUpdate = false;
+      }
+      if (r.shadowMapEnabled != null) r.shadowMapEnabled = false;
+      if (k.Ja && k.Ja.setParticleSize) {
+        try { k.Ja.setParticleSize(Math.min(h * 0.5, 480)); } catch (e1) {}
+      }
+      liteApplied = true;
+      SB.lite = "pr=0.5 no-shadow";
+    } catch (e) {}
+  }
+
   TOP.__SB = SB;
 
   var gw = null, k = null, down = {}, overlay = null;
@@ -485,7 +572,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v27 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v29 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -587,6 +674,75 @@
       if (!isPb(px + d[0] * spd * t, pz + d[1] * spd * t)) return true;
     }
     return false;
+  }
+  function wouldFallDt(px, pz, keys, stepDt, horizon) {
+    if (wouldFallKeys(px, pz, keys, horizon == null ? 0.28 : horizon)) return true;
+    var ka = null, up = !!keys.ArrowUp, down = !!keys.ArrowDown, left = !!keys.ArrowLeft, right = !!keys.ArrowRight;
+    if (up && left) ka = 225;
+    else if (up && right) ka = 315;
+    else if (down && left) ka = 125;
+    else if (down && right) ka = 45;
+    else if (up && !down) ka = 270;
+    else if (down && !up) ka = 90;
+    else if (left && !right) ka = 180;
+    else if (right && !left) ka = 0;
+    if (ka == null) return !isPb(px, pz);
+    var d = worldDirFromKa(ka), t = Math.min(0.1, Math.max(1 / 60, stepDt || 1 / 60)), spd = (k && k.Ah) || 8;
+    return !isPb(px + d[0] * spd * t, pz + d[1] * spd * t);
+  }
+  function dropLateralKeys(keys, kind) {
+    var k2 = { ArrowUp: keys.ArrowUp, ArrowDown: keys.ArrowDown, ArrowLeft: keys.ArrowLeft, ArrowRight: keys.ArrowRight };
+    if (kind === "v") { k2.ArrowLeft = 0; k2.ArrowRight = 0; }
+    else if (kind === "h") { k2.ArrowUp = 0; k2.ArrowDown = 0; }
+    return k2;
+  }
+  function onOuterLine(px, pz) {
+    return Math.abs(Math.abs(px) - 24) <= 0.85 || Math.abs(Math.abs(pz) - 24) <= 0.85;
+  }
+  function keysTowardOuter(px, pz) {
+    var k2 = emptyKeys();
+    var dx = Math.abs(Math.abs(px) - 24), dz = Math.abs(Math.abs(pz) - 24);
+    if (dx <= dz) {
+      if (px >= 0) { if (px < 23.7) k2.ArrowRight = 1; else if (px > 24.3) k2.ArrowLeft = 1; }
+      else { if (px > -23.7) k2.ArrowLeft = 1; else if (px < -24.3) k2.ArrowRight = 1; }
+    } else {
+      if (pz >= 0) { if (pz < 23.7) k2.ArrowDown = 1; else if (pz > 24.3) k2.ArrowUp = 1; }
+      else { if (pz > -23.7) k2.ArrowUp = 1; else if (pz < -24.3) k2.ArrowDown = 1; }
+    }
+    return k2;
+  }
+  function keysTowardCenter(px, pz, kind) {
+    var k2 = emptyKeys(), c = cellOf(px, pz);
+    if (kind === "v") {
+      if (px < c[0] - 0.12) k2.ArrowRight = 1;
+      else if (px > c[0] + 0.12) k2.ArrowLeft = 1;
+    } else if (kind === "h") {
+      if (pz < c[1] - 0.12) k2.ArrowDown = 1;
+      else if (pz > c[1] + 0.12) k2.ArrowUp = 1;
+    }
+    return k2;
+  }
+  function filterLagKeys(px, pz, keys) {
+    var k2 = { ArrowUp: keys.ArrowUp, ArrowDown: keys.ArrowDown, ArrowLeft: keys.ArrowLeft, ArrowRight: keys.ArrowRight };
+    var stepDt = recentStepDt();
+    var horizon = Math.max(0.28, stepDt * 5);
+    if (!onOuterLine(px, pz)) {
+      var rec = keysTowardOuter(px, pz);
+      var recDt = Math.min(0.1, Math.max(stepDt, 1 / 60));
+      if (!wouldFallDt(px, pz, rec, recDt, recDt)) return rec;
+    }
+    var c = cellOf(px, pz), kind = isNarrowPlank(c[0], c[1]);
+    if (stepDt >= 0.035 && kind) {
+      var off = kind === "v" ? Math.abs(px - c[0]) : Math.abs(pz - c[1]);
+      k2 = off > 0.22 ? keysTowardCenter(px, pz, kind) : dropLateralKeys(k2, kind);
+    }
+    if (stepDt < 0.035) return k2;
+    if (!wouldFallDt(px, pz, k2, stepDt, horizon)) return k2;
+    if (kind) {
+      k2 = dropLateralKeys(k2, kind);
+      if (!wouldFallDt(px, pz, k2, stepDt, horizon)) return k2;
+    }
+    return emptyKeys();
   }
   function emptyKeys() { return { ArrowUp: 0, ArrowDown: 0, ArrowLeft: 0, ArrowRight: 0 }; }
   function followCentreline(px, pz, ax, az, bx, bz) {
@@ -819,7 +975,17 @@
     }
     return best;
   }
+  var SPIKE_PADS = [[24,-21],[21,-24],[-21,-24],[-24,-21],[-24,21],[-21,24],[21,24],[24,21]];
+  function nearestSpikePad(px, pz) {
+    var best = 99, i, d;
+    for (i = 0; i < SPIKE_PADS.length; i++) {
+      d = Math.hypot(SPIKE_PADS[i][0] - px, SPIKE_PADS[i][1] - pz);
+      if (d < best) best = d;
+    }
+    return +best.toFixed(2);
+  }
   function recordHpLoss(before, after, px, pz, enemies) {
+
     var ev = {
       t: Date.now(),
       hpBefore: before,
@@ -835,12 +1001,12 @@
       nearestDart: +nearestDart(px, pz).toFixed(2),
       nearestFireball: +nearestFireball(px, pz).toFixed(2)
     };
-    ev.cause = ev.onSpikePad && ev.spikeUp ? "spike"
+    ev.nearestPad = nearestSpikePad(px, pz);
+    ev.cause = ev.spikeUp && (ev.onSpikePad || ev.nearestPad < 3.6) ? "spike"
       : (ev.nearestDart < 2.2 ? "dart"
         : (ev.nearestFireball < 2.2 ? "fireball"
           : (ev.nearestEnemy.dist < 4 ? "enemy/" + ev.nearestEnemy.type : "unknown")));
     SB.hpEvents = (SB.hpEvents || []).concat([ev]).slice(-24);
-    try { console.log("[SB v27 hp] " + ev.hpBefore + "->" + ev.hpAfter + " " + ev.cause + " (" + ev.x + "," + ev.z + ") " + ev.spikePhase + " enm=" + ev.nearestEnemy.type + "@" + ev.nearestEnemy.dist); } catch (e) {}
     return ev;
   }
 
@@ -1078,6 +1244,7 @@
     if (color === 0 && tank) { useZeitklingen(); return; }
     if (color === 0 && leftoverTrash) { useZeitklingen(); return; }
     if (color === 0 && SB.nearest <= 4 && k.i.Y <= 3) useZeitklingen();
+    if (SB.waveAge > 90 && enemies && enemies.length >= 1 && enemies.length <= 3 && !onTrap && color !== 1) useZeitklingen();
   }
 
   function classifyDeath(px, pz) {
@@ -1114,7 +1281,7 @@
     };
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
-    try { console.log("[SB v27 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
+    try { console.log("[SB v29 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -1161,6 +1328,8 @@
       "wave   " + SB.wave + "   score " + SB.score + "\n" +
       "near   " + SB.nearest.toFixed(1) + "  enm " + SB.enemies + "  fire " + SB.fireballs + "\n" +
       "atk    " + (SB.attack ? "YES" : "no") + "  blade " + SB.blade + "  tick " + SB.tick.toFixed(0) + "\n" +
+      "dt     p50=" + (function () { var st = dtStats(); return (st.p50 * 1000).toFixed(0) + " p95=" + (st.p95 * 1000).toFixed(0) + " max=" + (st.max * 1000).toFixed(0) + "ms  >40=" + st.over40 + "/" + st.frames; })() + "\n" +
+      (SB.lite ? "gfx    " + SB.lite + "\n" : "") +
       "bl     " + (SB.bl || 0) + " segs  gen " + GEN + "\n" +
       (SB.sanity ? "map    " + SB.sanity + "\n" : "") +
       (SB.err ? "ERR    " + SB.err + "\n" : "") +
@@ -1190,7 +1359,7 @@
     if (visible(play)) clickEl(play);
   }
   function logPayload() {
-    return { ver: SB.ver, runs: SB.runs, deaths: SB.deaths, hpEvents: SB.hpEvents || [] };
+    return { ver: SB.ver, runs: SB.runs, deaths: SB.deaths, hpEvents: SB.hpEvents || [], dt: dtStats(), lite: SB.lite || "" };
   }
   function persistLog() {
     var json = JSON.stringify(logPayload());
@@ -1203,7 +1372,7 @@
     try {
       var n = 0, i, r, name, blob, a, doc, url;
       for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 25) n++; }
-      name = "sumpfarena-v27-log-" + n + ".json";
+      name = "sumpfarena-v28-log-" + n + ".json";
       blob = new Blob([JSON.stringify(logPayload())], { type: "application/json" });
       doc = TOP.document;
       a = doc.createElement("a");
@@ -1235,7 +1404,7 @@
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 8000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 27, t: now });
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 29, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -1255,6 +1424,8 @@
   }
 
   function onNewRound(t0, p) {
+    waveStartedAt = t0; waveSeen = ""; lastFrameT = 0;
+    holdUntil = -1; holdState = ""; holdDest = null; holdDir = 1;
     SB.rs = t0;
     SB.runKills = 0;
     lastScoreNum = parseInt(SB.score, 10) || 0;
@@ -1562,6 +1733,76 @@
       }
     }
 
+    // v28: leave a spike pad when the pulse is up, or a 1.8 knock from the
+    // pad would leave pb. Abort standing on a 1-cell plank with a snake in 6.5.
+    (function () {
+      var onPad = isSpikeCell(p.x, p.z);
+      var c0 = cellOf(p.x, p.z);
+      var narrow = false, horiz, vert;
+      horiz = isPb(c0[0] + 3, c0[1]) || isPb(c0[0] - 3, c0[1]);
+      vert = isPb(c0[0], c0[1] + 3) || isPb(c0[0], c0[1] - 3);
+      if (horiz && !vert) narrow = true;
+      if (vert && !horiz) narrow = true;
+      var knockOff = false, L, dx, dz;
+      if (onPad) {
+        dx = p.x - c0[0]; dz = p.z - c0[1]; L = Math.hypot(dx, dz) || 1;
+        knockOff = !isPb(p.x + (dx / L) * 1.8, p.z + (dz / L) * 1.8);
+      }
+      function dirTo(tx0, tz0) {
+        var k = emptyKeys ? emptyKeys() : { ArrowUp: 0, ArrowDown: 0, ArrowLeft: 0, ArrowRight: 0 };
+        if (Math.abs(tx0 - p.x) >= Math.abs(tz0 - p.z)) {
+          if (tx0 - p.x > 0.08) k.ArrowRight = 1; else if (tx0 - p.x < -0.08) k.ArrowLeft = 1;
+        } else {
+          if (tz0 - p.z > 0.08) k.ArrowDown = 1; else if (tz0 - p.z < -0.08) k.ArrowUp = 1;
+        }
+        return k;
+      }
+      function nextSafe() {
+        var us = ringIndexNear(p.x, p.z), n = RING.length, dir = loopDir || 1, s, i, c;
+        for (s = 0; s < [2, 3, 1, 4, 5].length; s++) {
+          i = ((us + dir * [2, 3, 1, 4, 5][s]) % n + n) % n;
+          c = ringCell(i);
+          if (Math.abs(c[0] - c0[0]) > 0.21 && Math.abs(c[1] - c0[1]) > 0.21) continue;
+          if (isSpikeCell(c[0], c[1])) continue;
+          return c;
+        }
+        return ringCell(us);
+      }
+      if (holdUntil > t0 && holdDest) {
+        var dH = Math.hypot(p.x - holdDest[0], p.z - holdDest[1]);
+        if (dH > 0.45) {
+          tx = holdDest[0]; tz = holdDest[1]; seekDirect = true; SB.state = holdState || "leave-pad";
+        } else {
+          holdUntil = -1; holdDest = null;
+        }
+      }
+      if (!(holdUntil > t0)) {
+        if (onPad && (spikesUp() || knockOff)) {
+          var destP = nextSafe();
+          var trialP = dirTo(destP[0], destP[1]);
+          if (!wouldFallKeys(p.x, p.z, trialP, 0.5) && !wouldFallDt(p.x, p.z, trialP, recentStepDt(), 0.5)) {
+            tx = destP[0]; tz = destP[1]; seekDirect = true; SB.state = "leave-pad";
+            holdUntil = t0 + 1.0; holdState = "leave-pad"; holdDest = destP; holdDir = loopDir || 1;
+          }
+        }
+        var snClose = false, si2, spos3;
+        for (si2 = 0; si2 < enemies.length; si2++) {
+          spos3 = enemies[si2].mesh && enemies[si2].mesh.position;
+          if (spos3 && enemyName(enemies[si2]) === "snake" && Math.hypot(spos3.x - p.x, spos3.z - p.z) < 6.5) snClose = true;
+        }
+        var standing = /^(lure-spike|hold-spike|stage-spike|time-spike|yield|freeze-melee)$/.test(SB.state || "");
+        var dT = Math.hypot(p.x - tx, p.z - tz);
+        if (narrow && snClose && standing && dT < 1.0 && !isFrozen() && onOuterLine(p.x, p.z)) {
+          var destS = nextSafe();
+          var trialS = dirTo(destS[0], destS[1]);
+          if (!wouldFallKeys(p.x, p.z, trialS, 0.5) && !wouldFallDt(p.x, p.z, trialS, recentStepDt(), 0.5)) {
+            tx = destS[0]; tz = destS[1]; seekDirect = true; SB.state = "abort-plank";
+            holdUntil = t0 + 1.2; holdState = "abort-plank"; holdDest = destS; holdDir = loopDir || 1;
+          }
+        }
+      }
+    })();
+
     // v27: abort standing lure when a snake is in 6.5 (unless a lone leftover);
     // stay on the outer ring (no off-axis / inner cuts); finish leftover trash
     // with red / a 3-wide jab; centre-hug 1-cell planks and recover from a
@@ -1661,6 +1902,7 @@
         if (!wouldFallKeys(p.x, p.z, k2, 0.4)) followKeys = k2;
       }
     })();
+    followKeys = filterLagKeys(p.x, p.z, followKeys);
     applyFollowKeys(followKeys, t0);
     maybeUseBlade(p.x, p.z, enemies);
     SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + tx.toFixed(0) + "," + tz.toFixed(0) + " " + (tgt[2] || "");
@@ -1712,8 +1954,11 @@
       }
       k = gw.k || k;
       var t0 = ((gw.performance) || performance).now() / 1000;
+      noteFrameDt(t0);
+      lightenRenderer();
       if (!checkedMap && k && k.X) runtimeSelfCheck();
       syncHud();
+      noteWave(t0);
       var hpNow = SB.hp;
       if (lastHp > hpNow && lastHp > 0) recordHpLoss(lastHp, hpNow, SB.px, SB.pz, (k && k.ba) ? liveEnemies() : []);
       if ((lastHp > 0 && hpNow <= 0) || (k.i && k.i.la && !deathLogged)) logDeath(classifyDeath(SB.px, SB.pz));
@@ -1773,7 +2018,7 @@
         renderOverlay();
         try { TOP.document.title = "V" + SB.ver + " " + SB.score + " w" + SB.wave + " " + SB.state + " " + (SB.avg || 0).toFixed(1); } catch (e) {}
       } catch (e) {}
-    }, 200);
+    }, 250);
     try { TOP.__SB_TIMERS = { raf: 0, ui: uiTimer, ov: overlayTimer }; } catch (e) {}
     loop();
   }
