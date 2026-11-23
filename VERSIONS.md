@@ -13,6 +13,7 @@ Sim protocol (all numbers below): 11 trials, cap 2400 s, target wave 13, seeds `
 | v32.2 | `v32.2` | Earlier enemy dodging: larger yield radius (6/7), yield = move-away along the ring instead of standing, no cut-inner with an enemy within ~6.5. Plus all shared v32 fixes. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.2.js` |
 | v32.3 | `v32.3` | Both: water-edge margin and earlier enemy dodging, plus all shared v32 fixes. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.3.js` |
 | v33 | `main` (file `sumpfarena-bot-v33.js`) | Built on v32.1. Uses every Zeitklinge colour deliberately (see `sumpfarena-blades.md`). Fixes v32.1 live bugs: death recording, dump heartbeat, spike-gating livelock, stall hunting. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@f75f573ad292205a4053a0811267ead4e1572c72/sumpfarena-bot-v33.js` |
+| v34 | `main` (file `sumpfarena-bot-v34.js`) | Built on v33. Real game-over run counting (i-frame blink no longer opens a “run”), HP/death recording each frame, one autosave per 10 real game-overs, tighter blade policy, noodle cooldown. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@PENDING_V34_SHA/sumpfarena-bot-v34.js` |
 
 The v32 files on `main` are at commit `97d04b89a1d6c9020fa617a9e9a7823d4e334788`.
 
@@ -119,3 +120,53 @@ v33 dump/death fixes: versioned `countVerRuns`, 2 s persist heartbeat with a `cu
 | v33 | 0 | 0 | 0 | 7.50 | 2 | 1 | 0 | 0 | 3.09 | **0.50** | 1620s/24 | |
 
 v33 does **not** beat v32.1 on mean or ≥12/≥15, and does not beat v31 on all three clocks, so **stable stays v31**. It is still the build to test live next if the goal is working death logs, a live dump during a stall, breaking the wave-6 pad livelock, and actually using blades. Wave 18 remains unreached; leftover axes and medusa orbs in 13–17 are the wall, with high stall time in both versions.
+
+## v34 (wave-18 protocol)
+
+Same sim protocol as v33: **6 trials**, cap **4000 s**, **targetW=19**, clocks 1/60, 1/40, hitch 8%. Full v33 live write-up: `sumpfarena-deaths-v33.md` (from `/home/box/Downloads/sumpfarena-v33-log-final.json` only). Session 19:47:24–19:57:07 CET, 23 Nov 2026. Still alive at dump: wave 8 / 1510 / 52 kills / HP 5. **0 true game-overs.** HUD “Tode” stayed `(keine)` because the player never hit `la` or HP 0. The 13 “runs” (consecutive scores often +10–20, sometimes <1 s apart) were **HP chips and i-frame blinks**, plus a boot snapshot, not 13 lives.
+
+Root causes in the v33 live bot:
+
+- `inRound()` required `k.i.v.visible`. The 1 s i-frame window (`Oa`) blinks the mesh, so `inRound()` flickered false. `endRunCapture()` then ran because `SB.rs` is the round-start timestamp (always truthy after the first `onNewRound`), not a game-over flag.
+- Autosave: after the 10th fake run (19:54:08), the blink reset `runDumped` and `downloadLog()` fired eight times (`log-10.json` plus `(1)`…`(7)`).
+- 11 HP events were recorded and are the real injury log: snake 5, axe 4 (one mislabelled `unknown` at axe 4.50), fireball 1, grunt 1. No water / spike / arrow in this session.
+- Blades: 34 uses in ~10 min, 19 with 0 kills and 0 escapes (56%). Green was double-logged (arm + dash). Loose `blue-darts` / `green-close` / `yellow-arm` at full HP / `advantage-stuck` with no enemies did not pay off.
+- Noodle time sink in wave 6 (19:50–19:53, axe chip at 19:52:10 in state `noodle`): a 3 s abort reset `noodleSince`, so the next frame re-entered the bowl chase.
+
+v34 fixes:
+
+- Detect every HP decrease and every real game-over (`la` or HP ≤ 0) each frame; `deathLogged` is only a duplicate-record guard. HUD gains a “Treffer” list. A “run” is counted only on game over (or the Nochmal restart). `inRound()` no longer uses mesh visibility. Autosave writes once when the real run count crosses a multiple of 10 (`lastDownloadN`).
+- Blade policy is tighter and logs **one record per activation**: red freeze only when a tank is actually in reach (≲ 5.5); blue only for orbs, a dart that is actually close, or 3+ snakes; green only as a verified escape or a close that lands next to a target; yellow only when HP ≤ 3 or a hit is likely. 8–12 s cooldown after a use, longer after a zero-payoff, waived for real danger.
+- Noodle only when healing is worth it (HP ≤ 3, or ≤ 4 with no axe/boss nearby and wave < 13). Abort starts an 8 s cooldown so the bot cannot immediately re-enter. Waves ≥ 13: noodles only at HP ≤ 2.
+
+### 1/60 (6 trials, cap 4000, targetW=19)
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | B/wave | K/blade | Stall | Live |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| v31 | 0 | 1 | 1 | 8.17 | 2 | 2 | 0 | 0 | 4.22 | 0.28 | 1158s/11 | |
+| v33 | 0 | 0 | 0 | **10.67** | 3 | **3** | 0 | 0 | 3.56 | **0.41** | 5142s/28 | 8/1510 still alive, 0 true deaths, 34 blades, fake runs, noodle sink |
+| v34 | 0 | 0 | 0 | **10.67** | **4** | 2 | **1** | 0 | **1.83** | 0.37 | 5431s/38 | |
+
+v34 majority ≥10; one trial hit the 4000 s cap on wave 16 at HP 5 (first ≥15 on this clock). Blades/wave is about half of v33.
+
+### 1/40
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | B/wave | K/blade | Stall | Live |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| v31 | 0 | 0 | 1 | 8.83 | 2 | 2 | 0 | 0 | 3.25 | 0.24 | 1901s/24 | |
+| v33 | 0 | 0 | 0 | **9.83** | **3** | **3** | **1** | 0 | 3.78 | 0.33 | 4488s/29 | |
+| v34 | 0 | 0 | 0 | 9.17 | 2 | 2 | **1** | 0 | **1.16** | **0.58** | 3306s/29 | |
+
+v34 beats v31 on mean and has 0 arrow (v31 had 1) and much fewer blades, but is slightly behind v33 on mean and ≥10/≥12.
+
+### Hitch 8%
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | B/wave | K/blade | Stall | Live |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| v31 | 0 | 0 | 0 | 9.83 | 3 | 3 | 0 | 0 | 2.98 | 0.39 | 702s/17 | |
+| v33 | 0 | 0 | 0 | 7.50 | 2 | 1 | 0 | 0 | 3.09 | 0.50 | 1620s/24 | |
+| v34 | 1 | 0 | 0 | **14.67** | **6** | **6** | **3** | 0 | **1.92** | 0.50 | 5111s/53 | |
+
+v34 is far ahead on mean (all six trials ≥12, three ≥15, max 16) but has **1 water** at (−22.5, 8.7) wave 12, HP 3.5 — inward of the west plank, not a corner lip. Because of that safety regression, **stable stays v31** even though v34 has the higher mean on all three clocks. Wave 18 is still unreached; leftover axes and medusa orbs in 13–17 plus stall time remain the wall.
+
+**Recommend testing live next: v34** (own dump key `__SB_dump_v34`). The logging/run-count/autosave fixes and the tighter blades/noodle policy are the point of this build; watch hitch water and whether blades/wave stay low.
