@@ -2,15 +2,80 @@
   "use strict";
 
   var TOP = window;
-  var prevRuns = [];
-  var prevDeaths = [];
-  if (TOP.__SB) {
-    try {
-      if (TOP.__SB.runs) prevRuns = TOP.__SB.runs.slice();
-      if (TOP.__SB.deaths) prevDeaths = TOP.__SB.deaths.slice();
-      if (typeof TOP.__SB.stop === "function") TOP.__SB.stop();
-    } catch (e) {}
+  var GEN = (TOP.__SB_GEN || 0) + 1;
+  try { TOP.__SB_GEN = GEN; } catch (e) {}
+  try { if (TOP.top && TOP.top !== TOP) TOP.top.__SB_GEN = GEN; } catch (e2) {}
+
+  function allWindows() {
+    var out = [], seen = [];
+    function add(w) {
+      if (!w || seen.indexOf(w) >= 0) return;
+      seen.push(w);
+      out.push(w);
+    }
+    add(TOP);
+    try { add(TOP.top); } catch (e) {}
+    try { add(TOP.parent); } catch (e) {}
+    var di, docs = [];
+    try { docs.push(TOP.document); } catch (e) {}
+    try { if (TOP.top && TOP.top.document) docs.push(TOP.top.document); } catch (e) {}
+    for (di = 0; di < docs.length; di++) {
+      try {
+        var frames = docs[di].querySelectorAll("iframe"), fi, cw;
+        for (fi = 0; fi < frames.length; fi++) {
+          try { cw = frames[fi].contentWindow; if (cw) add(cw); } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    return out;
   }
+  function forceReleaseKeys(w) {
+    var names = ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", " ", "Control"];
+    var codes = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, " ": 32, Control: 17 };
+    var i, ev, targets, ti, t, KE;
+    try {
+      if (w.k && w.k.key) {
+        w.k.key.left = false; w.k.key.right = false; w.k.key.up = false;
+        w.k.key.Cb = false; w.k.key.w = false; w.k.key.a = false; w.k.key.s = false; w.k.key.d = false;
+      }
+    } catch (e) {}
+    try { KE = w.KeyboardEvent; } catch (e) { KE = KeyboardEvent; }
+    if (!KE) return;
+    for (i = 0; i < names.length; i++) {
+      try {
+        ev = new KE("keyup", { key: names[i] === "Control" ? "Control" : names[i], code: names[i] === " " ? "Space" : names[i] === "Control" ? "ControlLeft" : names[i], keyCode: codes[names[i]], which: codes[names[i]], bubbles: true, cancelable: true });
+        targets = [];
+        try { if (w.document) { targets.push(w.document); targets.push(w.document.body); var c = w.document.querySelector("canvas"); if (c) targets.push(c); } } catch (e) {}
+        targets.push(w);
+        for (ti = 0; ti < targets.length; ti++) {
+          t = targets[ti];
+          if (t && t.dispatchEvent) try { t.dispatchEvent(ev); } catch (e) {}
+        }
+      } catch (e) {}
+    }
+  }
+  function stopPreviousBots() {
+    var wins = allWindows(), wi, w, tm;
+    for (wi = 0; wi < wins.length; wi++) {
+      w = wins[wi];
+      try { if (w.__SB && typeof w.__SB.stop === "function") w.__SB.stop(); } catch (e) {}
+      try {
+        tm = w.__SB_TIMERS;
+        if (tm) {
+          try { if (tm.raf) w.cancelAnimationFrame(tm.raf); } catch (e) {}
+          try { if (tm.ui) clearInterval(tm.ui); } catch (e) {}
+          try { if (tm.ov) clearInterval(tm.ov); } catch (e) {}
+          w.__SB_TIMERS = null;
+        }
+      } catch (e) {}
+      forceReleaseKeys(w);
+      try { w.__SB_GEN = GEN; } catch (e) {}
+    }
+  }
+
+  var prevRuns = [];
+  stopPreviousBots();
+  try { if (TOP.__SB && TOP.__SB.runs) prevRuns = TOP.__SB.runs.slice(); } catch (e) {}
 
   var KEYS = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, " ": 32, Control: 17 };
   var ARROWS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
@@ -28,8 +93,8 @@
   var MIN_HOLD = 0.35;
   var ARRIVE = 0.8;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v22";
-  var LS_BLACKLIST = "__SB_blacklist_v22";
+  var LS_DEATHS = "__SB_deaths_v23";
+  var LS_DUMP = "__SB_dump_v23";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -58,7 +123,8 @@
   }
 
   var SB = {
-    ver: 22,
+    ver: 23,
+    gen: GEN,
     bl: 0,
     runs: prevRuns,
     deaths: loadDeaths(),
@@ -99,6 +165,7 @@
   var stuckSince = 0, trail = [], speedHist = [], deathLogged = false, lastAlivePos = null;
   var antiT = 0, antiX = 0, antiZ = 0;
   var lastSegA = null, lastSegB = null, joinEnd = [24, 0];
+  var waterSegCount = {}, sessionBlacklist = {}, runDumped = false, holdYieldUntil = 0;
   var prevPos = null, vel = [0, 0], curDir = 0, holdUntil = 0, lastScoreNum = 0;
   var RING = PLAN.slice();
   var route = [];
@@ -110,6 +177,10 @@
   var guardUntil = 0;
   var checkedMap = false;
 
+  function genAlive() {
+    try { if (TOP.__SB_GEN !== GEN) return false; } catch (e) { return false; }
+    return !stopped;
+  }
   function stop() {
     stopped = true;
     if (rafId) {
@@ -118,8 +189,11 @@
     }
     if (uiTimer) { clearInterval(uiTimer); uiTimer = 0; }
     if (overlayTimer) { clearInterval(overlayTimer); overlayTimer = 0; }
-    try { releaseAllKeys(); } catch (e) {}
-    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    try { if (TOP.__SB_TIMERS) { TOP.__SB_TIMERS.raf = 0; TOP.__SB_TIMERS.ui = 0; TOP.__SB_TIMERS.ov = 0; } } catch (e) {}
+    try { releaseAllKeys(true); } catch (e) {}
+    try { forceReleaseKeys(gw || TOP); } catch (e) {}
+    try { forceReleaseKeys(TOP); } catch (e) {}
+    if (overlay && overlay.parentNode) try { overlay.parentNode.removeChild(overlay); } catch (e) {}
     overlay = null;
     SB.state = "stopped";
   }
@@ -190,78 +264,14 @@
     var iz = Math.floor((z + 67.5) / 3);
     return [3 * ix - 67.5 + 1.5, 3 * iz - 67.5 + 1.5];
   }
-  function segKey(ax, az, bx, bz) {
-    var a = (+ax).toFixed(1) + "," + (+az).toFixed(1);
-    var b = (+bx).toFixed(1) + "," + (+bz).toFixed(1);
-    return a < b ? a + ">" + b : b + ">" + a;
-  }
-  function loadBlacklist() {
-    try {
-      var raw = TOP.localStorage && TOP.localStorage.getItem(LS_BLACKLIST);
-      var arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? arr : [];
-    } catch (e) { return []; }
-  }
-  function saveBlacklist(list) {
-    try { if (TOP.localStorage) TOP.localStorage.setItem(LS_BLACKLIST, JSON.stringify(list.slice(-80))); } catch (e) {}
-  }
-  var blacklist = loadBlacklist();
-  function isBlockedSeg(ax, az, bx, bz) {
-    var key = segKey(ax, az, bx, bz), i, b, k2;
-    for (i = 0; i < blacklist.length; i++) {
-      b = blacklist[i];
-      if (segKey(b.ax, b.az, b.bx, b.bz) === key) return true;
-    }
-    return false;
-  }
-  function rememberWaterDeath(rec) {
-    var ax, az, bx, bz, c, i, already, key;
-    if (lastSegA && lastSegB) { ax = lastSegA[0]; az = lastSegA[1]; bx = lastSegB[0]; bz = lastSegB[1]; }
-    else {
-      c = cellOf(rec.x, rec.z);
-      ax = c[0]; az = c[1];
-      bx = ax; bz = az;
-      if (rec.wp) {
-        var m = /(-?\d+),\s*(-?\d+)/.exec(rec.wp);
-        if (m) { bx = +m[1]; bz = +m[2]; }
-      }
-    }
-    key = segKey(ax, az, bx, bz);
-    already = false;
-    for (i = 0; i < blacklist.length; i++) {
-      if (segKey(blacklist[i].ax, blacklist[i].az, blacklist[i].bx, blacklist[i].bz) === key) { already = true; break; }
-    }
-    if (!already) {
-      blacklist.push({ ax: ax, az: az, bx: bx, bz: bz, x: rec.x, z: rec.z, wp: rec.wp || "", t: rec.t || Date.now() });
-      saveBlacklist(blacklist);
-    }
-    SB.bl = blacklist.length;
-    try { if (k && k.X) rebuildRingFromF(); } catch (e) {}
-  }
-  function seedBlacklistFromDeaths(list) {
-    if (!list || !list.length) return;
-    var i, d, reason;
-    for (i = 0; i < list.length; i++) {
-      d = list[i];
-      reason = (d && d.reason) || "";
-      if (!/^water/i.test(reason)) continue;
-      lastSegA = null; lastSegB = null;
-      rememberWaterDeath(d);
-    }
-  }
-  function segmentClear(ax, az, bx, bz, allowBlocked) {
-    if (!allowBlocked && isBlockedSeg(ax, az, bx, bz)) return false;
+  function segmentClear(ax, az, bx, bz) {
     var dist = Math.hypot(bx - ax, bz - az);
-    var n = Math.max(1, Math.ceil(dist / 0.25)), i, t, x, z;
-    var dx = bx - ax, dz = bz - az, L = dist || 1;
-    var px = -dz / L, pz = dx / L;
+    var n = Math.max(1, Math.ceil(dist / 0.5)), i, t, x, z;
     for (i = 0; i <= n; i++) {
       t = i / n;
-      x = ax + dx * t;
-      z = az + dz * t;
+      x = ax + (bx - ax) * t;
+      z = az + (bz - az) * t;
       if (!isPb(x, z)) return false;
-      if (!isPb(x + px * 0.6, z + pz * 0.6)) return false;
-      if (!isPb(x - px * 0.6, z - pz * 0.6)) return false;
     }
     return true;
   }
@@ -272,25 +282,33 @@
     for (i = 0; i < pts.length - 1; i++) if (!segmentClear(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])) return false;
     return true;
   }
-  function pathDirOk(cx, cz, dx, dz) {
-    if (!isPb(cx, cz)) return false;
-    var L = Math.hypot(dx, dz) || 1;
-    var ux = dx / L, uz = dz / L;
-    var px = -uz, pz = ux;
-    return isPb(cx + ux * 0.6, cz + uz * 0.6) &&
-      isPb(cx - ux * 0.6, cz - uz * 0.6) &&
-      isPb(cx + px * 0.6, cz + pz * 0.6) &&
-      isPb(cx - px * 0.6, cz - pz * 0.6);
+  function segKey(ax, az, bx, bz) {
+    var a = (+ax).toFixed(1) + "," + (+az).toFixed(1);
+    var b = (+bx).toFixed(1) + "," + (+bz).toFixed(1);
+    return a < b ? a + ">" + b : b + ">" + a;
   }
-  function nextStepToward(px, pz, tx, tz) {
-    if (segmentClear(px, pz, tx, tz)) return [tx, tz];
-    var path = bfsTo(px, pz, [[tx, tz]]);
-    if (path && path.length >= 2) {
-      if (segmentClear(px, pz, path[1][0], path[1][1])) return [path[1][0], path[1][1]];
+  function isBlockedSeg(ax, az, bx, bz) {
+    return !!sessionBlacklist[segKey(ax, az, bx, bz)];
+  }
+  function rememberWaterDeath(rec) {
+    var ax, az, bx, bz, c, key, n, m;
+    if (lastSegA && lastSegB) { ax = lastSegA[0]; az = lastSegA[1]; bx = lastSegB[0]; bz = lastSegB[1]; }
+    else {
+      c = cellOf(rec.x, rec.z);
+      ax = c[0]; az = c[1];
+      bx = ax; bz = az;
+      if (rec.wp) {
+        m = /(-?\d+),\s*(-?\d+)/.exec(rec.wp);
+        if (m) { bx = +m[1]; bz = +m[2]; }
+      }
     }
-    if (path && path.length >= 1 && isPb(path[0][0], path[0][1])) return [path[0][0], path[0][1]];
-    if (segmentClear(px, pz, tx, tz, true)) return [tx, tz];
-    return null;
+    key = segKey(ax, az, bx, bz);
+    n = (waterSegCount[key] || 0) + 1;
+    waterSegCount[key] = n;
+    if (n >= 2) {
+      sessionBlacklist[key] = 1;
+      SB.bl = Object.keys(sessionBlacklist).length;
+    }
   }
 
   function neighborsF(cx, cz) {
@@ -348,47 +366,18 @@
     return isPb(cx, cz);
   }
   function rebuildRingFromF() {
-    var cand = [], i, j, c, n, p, nxt, ddx, ddz, dropped = 0, lines = [], typ, live, path, fill;
+    var live = [], i, c, dropped = 0, lines = [], typ;
     for (i = 0; i < PLAN.length; i++) {
       c = PLAN[i];
       typ = (k && k.X && typeof gw.F === "function") ? gw.F(k.X, { x: c[0], y: 0, z: c[1] }) : null;
-      p = PLAN[(i - 1 + PLAN.length) % PLAN.length];
-      n = PLAN[(i + 1) % PLAN.length];
-      ddx = n[0] - p[0]; ddz = n[1] - p[1];
-      if (!ddx && !ddz) { ddx = n[0] - c[0]; ddz = n[1] - c[1]; }
-      if (cellAllowed(c[0], c[1]) && typ === k.X.type.pb && pathDirOk(c[0], c[1], ddx, ddz)) {
-        cand.push([c[0], c[1], c[2]]);
-      } else {
+      if (cellAllowed(c[0], c[1]) && typ === k.X.type.pb) live.push([c[0], c[1], c[2]]);
+      else {
         dropped++;
         lines.push("DROP " + c[0] + "," + c[1] + " " + c[2] + " F=" + typ);
       }
     }
-    live = [];
-    for (i = 0; i < cand.length; i++) {
-      if (!live.length) { live.push(cand[i]); continue; }
-      p = live[live.length - 1];
-      nxt = cand[i];
-      ddx = nxt[0] - p[0]; ddz = nxt[1] - p[1];
-      if (((Math.abs(ddx) === 3 && ddz === 0) || (Math.abs(ddz) === 3 && ddx === 0)) && segmentClear(p[0], p[1], nxt[0], nxt[1])) {
-        live.push(nxt);
-      } else if (segmentClear(p[0], p[1], nxt[0], nxt[1])) {
-        fill = bfsTo(p[0], p[1], [nxt]);
-        if (fill && fill.length >= 2) {
-          for (j = 1; j < fill.length; j++) live.push([fill[j][0], fill[j][1], nxt[2] || "path"]);
-        } else live.push(nxt);
-      } else {
-        fill = bfsTo(p[0], p[1], [nxt]);
-        if (fill && fill.length >= 2) {
-          for (j = 1; j < fill.length; j++) live.push([fill[j][0], fill[j][1], nxt[2] || "path"]);
-        } else {
-          dropped++;
-          lines.push("GAP " + p[0] + "," + p[1] + "->" + nxt[0] + "," + nxt[1]);
-        }
-      }
-    }
     if (live.length >= 8) RING = live;
     SB.dropped = dropped;
-    SB.bl = blacklist.length;
     return lines;
   }
 
@@ -412,7 +401,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v22 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v23 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -633,13 +622,10 @@
   }
 
   function pickStartRoute(px, pz) {
-    var i, path, ends;
+    var i;
     for (i = 0; i < START_CANDIDATES.length; i++) {
       if (pathClear(START_CANDIDATES[i])) return START_CANDIDATES[i].map(function (p) { return [p[0], p[1]]; });
     }
-    ends = [[24, 0], [0, 24], [-24, 0], [0, -24]];
-    path = bfsTo(px, pz, ends);
-    if (path && path.length) return path;
     return START_CANDIDATES[0].map(function (p) { return [p[0], p[1]]; });
   }
   function ringIndexAt(x, z) {
@@ -658,24 +644,32 @@
     SB.state = "loop";
     joinEnd = [endx, endz];
   }
-  function innerShortcut(px, pz, enemies) {
-    var c = cellOf(px, pz), tries = [], i, n, j, e, blocked, h, best = null, bestH = Math.hypot(px, pz);
-    tries.push([c[0] - 3 * (c[0] > 0 ? 1 : c[0] < 0 ? -1 : 0), c[1]]);
-    tries.push([c[0], c[1] - 3 * (c[1] > 0 ? 1 : c[1] < 0 ? -1 : 0)]);
-    var nbs = neighborsF(c[0], c[1]);
-    for (i = 0; i < nbs.length; i++) tries.push(nbs[i]);
-    for (i = 0; i < tries.length; i++) {
-      n = tries[i];
-      if (!isPb(n[0], n[1])) continue;
-      if (!segmentClear(px, pz, n[0], n[1]) && !nextStepToward(px, pz, n[0], n[1])) continue;
-      h = Math.hypot(n[0], n[1]);
-      if (h >= bestH - 0.4) continue;
+  function enemyBehind(px, pz, tx, tz, enemies, distMax) {
+    var dx = tx - px, dz = tz - pz, L = Math.hypot(dx, dz) || 1, i, e, ex, ez, d, best = null, bestD = 1e9;
+    dx /= L; dz /= L;
+    for (i = 0; i < enemies.length; i++) {
+      e = enemies[i].mesh.position;
+      ex = e.x - px; ez = e.z - pz;
+      d = Math.hypot(ex, ez);
+      if (d > distMax || d < 0.01) continue;
+      if (ex * dx + ez * dz < 0 && d < bestD) { bestD = d; best = enemies[i]; }
+    }
+    return best;
+  }
+  function innerSafeCell(px, pz, enemies) {
+    var c = cellOf(px, pz), i, nx, nz, j, e, blocked, h, best = null, bestH = Math.hypot(px, pz);
+    for (i = 0; i < 4; i++) {
+      nx = c[0] + N4[i][0];
+      nz = c[1] + N4[i][1];
+      if (!isPb(nx, nz)) continue;
+      h = Math.hypot(nx, nz);
+      if (h >= bestH - 0.2) continue;
       blocked = false;
       for (j = 0; j < enemies.length; j++) {
         e = enemies[j].mesh.position;
-        if (Math.hypot(e.x - n[0], e.z - n[1]) < 2.0) { blocked = true; break; }
+        if (Math.hypot(e.x - nx, e.z - nz) < 1.6) { blocked = true; break; }
       }
-      if (!blocked && h < (best ? Math.hypot(best[0], best[1]) : 1e9)) best = n;
+      if (!blocked) { best = [nx, nz]; bestH = h; }
     }
     return best;
   }
@@ -770,6 +764,7 @@
   }
   function logDeath(reason) {
     if (deathLogged) return;
+    deathLogged = true;
     var src = lastAlivePos || { x: SB.px, z: SB.pz, y: 0, dx: vel[0], dz: vel[1] };
     var rec = {
       x: +(+src.x).toFixed(2), z: +(+src.z).toFixed(2), y: +(+src.y || 0).toFixed(2),
@@ -777,14 +772,9 @@
       reason: reason || "die", score: SB.score, wave: SB.wave,
       state: SB.state, wp: SB.wp, t: Date.now()
     };
-    var last = SB.deaths[SB.deaths.length - 1];
-    if (last && rec.t - (last.t || 0) < 2000 && Math.hypot(rec.x - last.x, rec.z - last.z) < 0.6) {
-      deathLogged = true;
-      return;
-    }
-    deathLogged = true;
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
+    try { console.log("[SB v23 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -831,7 +821,7 @@
       "wave   " + SB.wave + "   score " + SB.score + "\n" +
       "near   " + SB.nearest.toFixed(1) + "  enm " + SB.enemies + "  fire " + SB.fireballs + "\n" +
       "atk    " + (SB.attack ? "YES" : "no") + "  blade " + SB.blade + "  tick " + SB.tick.toFixed(0) + "\n" +
-      "bl     " + (SB.bl || 0) + " segs  drop " + (SB.dropped || 0) + "\n" +
+      "bl     " + (SB.bl || 0) + " segs  gen " + GEN + "\n" +
       (SB.sanity ? "map    " + SB.sanity + "\n" : "") +
       (SB.err ? "ERR    " + SB.err + "\n" : "") +
       "--- Läufe ---\n" + runs + "\n" +
@@ -850,7 +840,7 @@
     }
     if (again) {
       if (lastHp > 0) logDeath(classifyDeath(SB.px, SB.pz));
-      logRun();
+      endRunCapture();
       clickEl(again);
       SB.wave = "1"; SB.score = "0"; SB.state = "restart"; SB.runKills = 0; lastScoreNum = 0;
       route = []; onRing = false;
@@ -859,13 +849,45 @@
     var play = Q(".entry.level_02 .play");
     if (visible(play)) clickEl(play);
   }
+  function logPayload() {
+    return { ver: SB.ver, runs: SB.runs, deaths: SB.deaths };
+  }
+  function persistLog() {
+    var json = JSON.stringify(logPayload());
+    try { if (TOP.localStorage) TOP.localStorage.setItem(LS_DUMP, json); } catch (e) {}
+    TOP.__SB_dump = function () { return JSON.stringify(logPayload()); };
+    SB.dump = TOP.__SB_dump;
+  }
+  function downloadLog() {
+    persistLog();
+    try {
+      var n = 0, i, r, name, blob, a, doc, url;
+      for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 23) n++; }
+      name = (n && n % 5 === 0) ? ("sumpfarena-v23-log-" + n + ".json") : "sumpfarena-v23-log.json";
+      blob = new Blob([JSON.stringify(logPayload())], { type: "application/json" });
+      doc = TOP.document;
+      a = doc.createElement("a");
+      url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = name;
+      a.style.display = "none";
+      doc.body.appendChild(a);
+      a.click();
+      setTimeout(function () { try { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); } catch (e) {} }, 1500);
+    } catch (e) { SB.err = "dump " + ((e && e.message) || e); }
+  }
+  function endRunCapture() {
+    logRun();
+    persistLog();
+    if (!runDumped) { downloadLog(); runDumped = true; }
+  }
   function logRun() {
     var score = SB.score, wave = SB.wave, kills = SB.runKills;
     if (score === "?" && wave === "?") return;
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 5000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 22, t: now });
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 23, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -892,7 +914,7 @@
     trail = []; speedHist = [];
     stuckSince = 0; waitUntil = 0; guardUntil = 0; reverseUntil = 0; antiT = 0;
     loopDir = 1; onRing = false; holdUntil = 0;
-    lastSegA = null; lastSegB = null;
+    lastSegA = null; lastSegB = null; runDumped = false; holdYieldUntil = 0;
     if (k && k.X) runtimeSelfCheck();
     route = pickStartRoute(p.x, p.z);
     routeI = 0;
@@ -909,7 +931,8 @@
   function tryAltDir(px, pz, tx, tz, t0) {
     var candidates = [
       [tx - px, tz - pz],
-      [3, 0], [-3, 0], [0, 3], [0, -3]
+      [3, 0], [-3, 0], [0, 3], [0, -3],
+      [3, 3], [3, -3], [-3, 3], [-3, -3]
     ];
     var i, dx, dz, len, nx, nz, best = null, bestDot = -1e9, dot, towardX = tx - px, towardZ = tz - pz, tlen;
     tlen = Math.hypot(towardX, towardZ) || 1;
@@ -926,21 +949,6 @@
     }
     if (best) holdKa(chooseKa(best[0], best[1], t0, true), t0);
     return !!best;
-  }
-
-  function applyVia(px, pz, tx, tz) {
-    var nxt = nextStepToward(px, pz, tx, tz);
-    if (nxt) return nxt;
-    return [tx, tz];
-  }
-  function centrelineBias(px, pz, ax, az, bx, bz, vx, vz) {
-    var dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz);
-    if (L < 0.2) return [vx, vz];
-    var ux = dx / L, uz = dz / L;
-    var pxp = -uz, pzp = ux;
-    var cte = (px - ax) * pxp + (pz - az) * pzp;
-    if (Math.abs(cte) < 0.25) return [vx, vz];
-    return [vx - pxp * cte * 1.6, vz - pzp * cte * 1.6];
   }
 
   function step(t0) {
@@ -985,23 +993,48 @@
       }
     }
     if (onRing) {
+      var nearI = ringIndexNear(p.x, p.z);
+      var nearC = ringCell(nearI);
+      if (Math.hypot(nearC[0] - p.x, nearC[1] - p.z) > 2.4) {
+        SB.wi = nearI;
+      }
       var cur = ringCell(SB.wi);
       if (cur && Math.hypot(cur[0] - p.x, cur[1] - p.z) < ARRIVE) {
         SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
+      }
+      var fromC = ringCell(SB.wi - loopDir), toC = ringCell(SB.wi);
+      if (fromC && toC && isBlockedSeg(fromC[0], fromC[1], toC[0], toC[1])) {
+        var skipI = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
+        var skipC = ringCell(skipI);
+        if (skipC && !isBlockedSeg(fromC[0], fromC[1], skipC[0], skipC[1]) && isPb(skipC[0], skipC[1])) {
+          SB.wi = skipI;
+        } else {
+          loopDir *= -1;
+          SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
+        }
       }
     }
 
     var tgt = currentTarget();
     var tx = tgt[0], tz = tgt[1];
-    var segFrom = onRing ? ringCell(SB.wi - loopDir) : (routeI > 0 && route[routeI - 1] ? route[routeI - 1] : here);
 
     if (safetyBad(p.x, p.z) || !isPb(p.x, p.z)) {
       guardUntil = t0 + 0.2;
     }
     if (t0 < guardUntil) {
-      var safeT = onRing ? ringCell(SB.wi) : (route[Math.min(routeI, Math.max(0, route.length - 1))] || joinEnd || [24, 0]);
-      var via = applyVia(p.x, p.z, safeT[0], safeT[1]);
-      tx = via[0]; tz = via[1];
+      var safeT = onRing ? ringCell(SB.wi) : (route[Math.min(routeI, Math.max(0, route.length - 1))] || [24, 0]);
+      if (onRing && Math.hypot(ringCell(ringIndexNear(p.x, p.z))[0] - p.x, ringCell(ringIndexNear(p.x, p.z))[1] - p.z) < Math.hypot(safeT[0] - p.x, safeT[1] - p.z) + 0.4) {
+        safeT = ringCell(ringIndexNear(p.x, p.z));
+      }
+      tx = safeT[0]; tz = safeT[1];
+      if (!isPb(tx, tz) || !segmentClear(p.x, p.z, p.x + (tx - p.x) * 0.4, p.z + (tz - p.z) * 0.4)) {
+        var nbs = neighborsF(p.x, p.z), ni, bestN = null, bestNd = 1e9, dd;
+        for (ni = 0; ni < nbs.length; ni++) {
+          dd = Math.hypot(nbs[ni][0] - tx, nbs[ni][1] - tz);
+          if (dd < bestNd) { bestNd = dd; bestN = nbs[ni]; }
+        }
+        if (bestN) { tx = bestN[0]; tz = bestN[1]; }
+      }
       SB.state = onRing ? "loop" : "start";
     }
 
@@ -1018,51 +1051,33 @@
     }
 
     var ahead = enemyAhead(p.x, p.z, tx, tz, enemies, 4);
-    if (ahead && onRing) {
-      var opp = ringCell(SB.wi - loopDir);
-      var otherAhead = enemyAhead(p.x, p.z, opp[0], opp[1], enemies, 4);
-      if (otherAhead) {
-        var inner = innerShortcut(p.x, p.z, enemies);
-        if (inner) {
-          var iv = applyVia(p.x, p.z, inner[0], inner[1]);
-          tx = iv[0]; tz = iv[1];
-          SB.state = "shortcut";
-        } else if (k.i && k.i.Rb >= 0) {
-          useZeitklingen();
-          SB.state = "blade";
-        } else {
-          var esc2 = walkableEscape(p.x, p.z, enemies);
-          if (esc2.length) {
-            var ev = applyVia(p.x, p.z, esc2[0][0], esc2[0][1]);
-            tx = ev[0]; tz = ev[1];
-            SB.state = "dodge";
-          } else {
-            pulseAttack(t0);
-            SB.state = "cornered";
-          }
-        }
-      } else if (t0 >= reverseUntil) {
+    var behind = enemyBehind(p.x, p.z, tx, tz, enemies, 5);
+    if (ahead && behind) {
+      var inner = innerSafeCell(p.x, p.z, enemies);
+      if (inner) { tx = inner[0]; tz = inner[1]; SB.state = "yield"; holdYieldUntil = t0 + 0.9; }
+      else { SB.state = "yield"; holdYieldUntil = t0 + 0.5; }
+      if (k && k.i && k.i.Rb >= 0) useZeitklingen();
+    } else if (t0 < holdYieldUntil) {
+      SB.state = "yield";
+    } else if (ahead) {
+      if (t0 >= reverseUntil && onRing) {
         loopDir *= -1;
         reverseUntil = t0 + 1.8;
         SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
         tgt = currentTarget();
-        var rv = applyVia(p.x, p.z, tgt[0], tgt[1]);
-        tx = rv[0]; tz = rv[1];
+        tx = tgt[0]; tz = tgt[1];
+        SB.state = "reverse";
+      } else if (t0 < reverseUntil && onRing) {
         SB.state = "reverse";
       } else {
-        SB.state = "reverse";
-        var rv2 = applyVia(p.x, p.z, tx, tz);
-        tx = rv2[0]; tz = rv2[1];
-      }
-    } else if (ahead && !onRing) {
-      var esc = walkableEscape(p.x, p.z, enemies);
-      if (!esc.length) {
-        pulseAttack(t0);
-        SB.state = "cornered";
-      } else {
-        var evs = applyVia(p.x, p.z, esc[0][0], esc[0][1]);
-        tx = evs[0]; tz = evs[1];
-        SB.state = "dodge";
+        var esc = walkableEscape(p.x, p.z, enemies);
+        if (!esc.length) {
+          pulseAttack(t0);
+          SB.state = "cornered";
+        } else {
+          tx = esc[0][0]; tz = esc[0][1];
+          SB.state = "dodge";
+        }
       }
     } else if (t0 < reverseUntil && onRing) {
       SB.state = "reverse";
@@ -1086,25 +1101,18 @@
       }
     }
 
-    var viaT = applyVia(p.x, p.z, tx, tz);
-    tx = viaT[0]; tz = viaT[1];
-    lastSegA = [segFrom[0], segFrom[1]];
+    lastSegA = onRing ? ringCell(SB.wi - loopDir) : (routeI > 0 && route[routeI - 1] ? route[routeI - 1] : [p.x, p.z]);
     lastSegB = [tx, tz];
 
     var vx = tx - p.x, vz = tz - p.z;
-    if (onRing && segFrom) {
-      var biased = centrelineBias(p.x, p.z, segFrom[0], segFrom[1], tx, tz, vx, vz);
-      vx = biased[0]; vz = biased[1];
-    }
     var stepLen = Math.hypot(vx, vz) || 1;
     var nextX = p.x + (vx / stepLen) * 0.8;
     var nextZ = p.z + (vz / stepLen) * 0.8;
     if (!isPb(nextX, nextZ) || !segmentClear(p.x, p.z, nextX, nextZ)) {
-      var pull = onRing ? ringCell(SB.wi) : (joinEnd || here);
-      if (!isPb(pull[0], pull[1])) pull = here;
-      var pv = applyVia(p.x, p.z, pull[0], pull[1]);
-      vx = pv[0] - p.x;
-      vz = pv[1] - p.z;
+      var pull = onRing ? ringCell(ringIndexNear(p.x, p.z)) : here;
+      if (!onRing || (isDoorCell(here[0], here[1]) || !isPb(here[0], here[1]))) pull = ringCell(ringIndexNear(p.x, p.z));
+      vx = pull[0] - p.x;
+      vz = pull[1] - p.z;
     }
 
     var idx = chooseKa(vx, vz, t0, false);
@@ -1118,7 +1126,7 @@
     }
 
     var keyHeld = !!(down.ArrowLeft || down.ArrowRight || down.ArrowUp || down.ArrowDown);
-    if (keyHeld) {
+    if (keyHeld && t0 >= holdYieldUntil) {
       if (!antiT) { antiT = t0; antiX = p.x; antiZ = p.z; }
       if (t0 - antiT >= 0.6) {
         var disp = Math.hypot(p.x - antiX, p.z - antiZ);
@@ -1134,11 +1142,10 @@
             }
           }
           var nt = currentTarget();
-          var nv = applyVia(p.x, p.z, nt[0], nt[1]);
-          if (!tryAltDir(p.x, p.z, nv[0], nv[1], t0)) {
-            holdKa(chooseKa(nv[0] - p.x, nv[1] - p.z, t0, true), t0);
+          if (!tryAltDir(p.x, p.z, nt[0], nt[1], t0)) {
+            holdKa(chooseKa(nt[0] - p.x, nt[1] - p.z, t0, true), t0);
           }
-          SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + "unstick " + nv[0] + "," + nv[1];
+          SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + "unstick " + nt[0] + "," + nt[1];
         } else SB.stuck = 0;
         antiT = t0; antiX = p.x; antiZ = p.z;
       }
@@ -1149,8 +1156,9 @@
     prevPos = [p.x, p.z, t0, p.y];
   }
 
+
   function tick() {
-    if (stopped) return;
+    if (!genAlive()) { stop(); return; }
     try {
       SB.n++;
       if (!gw || !gw.k) {
@@ -1171,10 +1179,9 @@
         onNewRound(t0, p);
         SB._alive = true;
       } else if (running && SB._alive !== true && p && !atSpawn) {
-        var recov = bfsTo(p.x, p.z, RING);
-        if (recov && recov.length) { route = recov; routeI = 0; onRing = false; joinEnd = recov[recov.length - 1]; }
-        else { onRing = true; SB.wi = ringIndexNear(p.x, p.z); }
-        SB.state = onRing ? "loop" : "start";
+        onRing = true;
+        SB.wi = ringIndexNear(p.x, p.z);
+        SB.state = "loop";
         SB._alive = true;
       } else if (running && SB.state === "falling" && k.i && k.i.Ta === false && !atSpawn) {
         SB.state = onRing ? "loop" : "start";
@@ -1183,6 +1190,7 @@
       lastHp = hpNow;
       if (!running) {
         if (k && k.i && (k.i.la || hpNow <= 0) && !deathLogged) logDeath(classifyDeath(SB.px, SB.pz));
+        if (deathLogged || SB.rs) endRunCapture();
         releaseAllKeys();
         if (SB.state !== "restart" && SB.state !== "falling") SB.state = "wait-round";
         SB._alive = false;
@@ -1196,34 +1204,32 @@
   }
 
   function loop() {
-    if (stopped) return;
+    if (!genAlive()) { stop(); return; }
     tick();
+    if (!genAlive()) return;
     rafId = (gw || TOP).requestAnimationFrame(loop);
+    try { if (TOP.__SB_TIMERS) TOP.__SB_TIMERS.raf = rafId; } catch (e) {}
   }
 
   function boot() {
     ensureOverlay();
-    try {
-      var prev = (TOP.__SB && TOP.__SB.deaths) || [];
-      seedBlacklistFromDeaths(prevDeaths);
-      seedBlacklistFromDeaths(loadDeaths());
-      SB.bl = blacklist.length;
-    } catch (e) {}
+    persistLog();
     renderOverlay();
     gw = findGameWindow();
     if (gw) k = gw.k || null;
     uiTimer = setInterval(function () {
-      if (stopped) return;
+      if (!genAlive()) { try { clearInterval(uiTimer); } catch (e) {} return; }
       try { clickUi(); } catch (e) { SB.err = e.message; }
     }, 70);
     overlayTimer = setInterval(function () {
-      if (stopped) return;
+      if (!genAlive()) { try { clearInterval(overlayTimer); } catch (e) {} return; }
       try {
         ensureOverlay();
         renderOverlay();
         try { TOP.document.title = "V" + SB.ver + " " + SB.score + " w" + SB.wave + " " + SB.state + " " + (SB.avg || 0).toFixed(1); } catch (e) {}
       } catch (e) {}
     }, 200);
+    try { TOP.__SB_TIMERS = { raf: 0, ui: uiTimer, ov: overlayTimer }; } catch (e) {}
     loop();
   }
 
