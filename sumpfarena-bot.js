@@ -3,9 +3,11 @@
 
   var TOP = window;
   var prevRuns = [];
+  var prevDeaths = [];
   if (TOP.__SB) {
     try {
       if (TOP.__SB.runs) prevRuns = TOP.__SB.runs.slice();
+      if (TOP.__SB.deaths) prevDeaths = TOP.__SB.deaths.slice();
       if (typeof TOP.__SB.stop === "function") TOP.__SB.stop();
     } catch (e) {}
   }
@@ -26,7 +28,8 @@
   var MIN_HOLD = 0.35;
   var ARRIVE = 0.8;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v21";
+  var LS_DEATHS = "__SB_deaths_v22";
+  var LS_BLACKLIST = "__SB_blacklist_v22";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -55,7 +58,8 @@
   }
 
   var SB = {
-    ver: 21,
+    ver: 22,
+    bl: 0,
     runs: prevRuns,
     deaths: loadDeaths(),
     err: "",
@@ -94,6 +98,7 @@
   var lastHud = "", lastHp = 0, lastAttackAt = -9, lastWatchdog = 0, lastKeyRefresh = 0, lastFocus = 0;
   var stuckSince = 0, trail = [], speedHist = [], deathLogged = false, lastAlivePos = null;
   var antiT = 0, antiX = 0, antiZ = 0;
+  var lastSegA = null, lastSegB = null, joinEnd = [24, 0];
   var prevPos = null, vel = [0, 0], curDir = 0, holdUntil = 0, lastScoreNum = 0;
   var RING = PLAN.slice();
   var route = [];
@@ -185,14 +190,78 @@
     var iz = Math.floor((z + 67.5) / 3);
     return [3 * ix - 67.5 + 1.5, 3 * iz - 67.5 + 1.5];
   }
-  function segmentClear(ax, az, bx, bz) {
+  function segKey(ax, az, bx, bz) {
+    var a = (+ax).toFixed(1) + "," + (+az).toFixed(1);
+    var b = (+bx).toFixed(1) + "," + (+bz).toFixed(1);
+    return a < b ? a + ">" + b : b + ">" + a;
+  }
+  function loadBlacklist() {
+    try {
+      var raw = TOP.localStorage && TOP.localStorage.getItem(LS_BLACKLIST);
+      var arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+  }
+  function saveBlacklist(list) {
+    try { if (TOP.localStorage) TOP.localStorage.setItem(LS_BLACKLIST, JSON.stringify(list.slice(-80))); } catch (e) {}
+  }
+  var blacklist = loadBlacklist();
+  function isBlockedSeg(ax, az, bx, bz) {
+    var key = segKey(ax, az, bx, bz), i, b, k2;
+    for (i = 0; i < blacklist.length; i++) {
+      b = blacklist[i];
+      if (segKey(b.ax, b.az, b.bx, b.bz) === key) return true;
+    }
+    return false;
+  }
+  function rememberWaterDeath(rec) {
+    var ax, az, bx, bz, c, i, already, key;
+    if (lastSegA && lastSegB) { ax = lastSegA[0]; az = lastSegA[1]; bx = lastSegB[0]; bz = lastSegB[1]; }
+    else {
+      c = cellOf(rec.x, rec.z);
+      ax = c[0]; az = c[1];
+      bx = ax; bz = az;
+      if (rec.wp) {
+        var m = /(-?\d+),\s*(-?\d+)/.exec(rec.wp);
+        if (m) { bx = +m[1]; bz = +m[2]; }
+      }
+    }
+    key = segKey(ax, az, bx, bz);
+    already = false;
+    for (i = 0; i < blacklist.length; i++) {
+      if (segKey(blacklist[i].ax, blacklist[i].az, blacklist[i].bx, blacklist[i].bz) === key) { already = true; break; }
+    }
+    if (!already) {
+      blacklist.push({ ax: ax, az: az, bx: bx, bz: bz, x: rec.x, z: rec.z, wp: rec.wp || "", t: rec.t || Date.now() });
+      saveBlacklist(blacklist);
+    }
+    SB.bl = blacklist.length;
+    try { if (k && k.X) rebuildRingFromF(); } catch (e) {}
+  }
+  function seedBlacklistFromDeaths(list) {
+    if (!list || !list.length) return;
+    var i, d, reason;
+    for (i = 0; i < list.length; i++) {
+      d = list[i];
+      reason = (d && d.reason) || "";
+      if (!/^water/i.test(reason)) continue;
+      lastSegA = null; lastSegB = null;
+      rememberWaterDeath(d);
+    }
+  }
+  function segmentClear(ax, az, bx, bz, allowBlocked) {
+    if (!allowBlocked && isBlockedSeg(ax, az, bx, bz)) return false;
     var dist = Math.hypot(bx - ax, bz - az);
-    var n = Math.max(1, Math.ceil(dist / 0.5)), i, t, x, z;
+    var n = Math.max(1, Math.ceil(dist / 0.25)), i, t, x, z;
+    var dx = bx - ax, dz = bz - az, L = dist || 1;
+    var px = -dz / L, pz = dx / L;
     for (i = 0; i <= n; i++) {
       t = i / n;
-      x = ax + (bx - ax) * t;
-      z = az + (bz - az) * t;
+      x = ax + dx * t;
+      z = az + dz * t;
       if (!isPb(x, z)) return false;
+      if (!isPb(x + px * 0.6, z + pz * 0.6)) return false;
+      if (!isPb(x - px * 0.6, z - pz * 0.6)) return false;
     }
     return true;
   }
@@ -202,6 +271,26 @@
     for (i = 0; i < pts.length; i++) if (!isPb(pts[i][0], pts[i][1])) return false;
     for (i = 0; i < pts.length - 1; i++) if (!segmentClear(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])) return false;
     return true;
+  }
+  function pathDirOk(cx, cz, dx, dz) {
+    if (!isPb(cx, cz)) return false;
+    var L = Math.hypot(dx, dz) || 1;
+    var ux = dx / L, uz = dz / L;
+    var px = -uz, pz = ux;
+    return isPb(cx + ux * 0.6, cz + uz * 0.6) &&
+      isPb(cx - ux * 0.6, cz - uz * 0.6) &&
+      isPb(cx + px * 0.6, cz + pz * 0.6) &&
+      isPb(cx - px * 0.6, cz - pz * 0.6);
+  }
+  function nextStepToward(px, pz, tx, tz) {
+    if (segmentClear(px, pz, tx, tz)) return [tx, tz];
+    var path = bfsTo(px, pz, [[tx, tz]]);
+    if (path && path.length >= 2) {
+      if (segmentClear(px, pz, path[1][0], path[1][1])) return [path[1][0], path[1][1]];
+    }
+    if (path && path.length >= 1 && isPb(path[0][0], path[0][1])) return [path[0][0], path[0][1]];
+    if (segmentClear(px, pz, tx, tz, true)) return [tx, tz];
+    return null;
   }
 
   function neighborsF(cx, cz) {
@@ -259,18 +348,47 @@
     return isPb(cx, cz);
   }
   function rebuildRingFromF() {
-    var live = [], i, c, dropped = 0, lines = [], typ;
+    var cand = [], i, j, c, n, p, nxt, ddx, ddz, dropped = 0, lines = [], typ, live, path, fill;
     for (i = 0; i < PLAN.length; i++) {
       c = PLAN[i];
       typ = (k && k.X && typeof gw.F === "function") ? gw.F(k.X, { x: c[0], y: 0, z: c[1] }) : null;
-      if (cellAllowed(c[0], c[1]) && typ === k.X.type.pb) live.push([c[0], c[1], c[2]]);
-      else {
+      p = PLAN[(i - 1 + PLAN.length) % PLAN.length];
+      n = PLAN[(i + 1) % PLAN.length];
+      ddx = n[0] - p[0]; ddz = n[1] - p[1];
+      if (!ddx && !ddz) { ddx = n[0] - c[0]; ddz = n[1] - c[1]; }
+      if (cellAllowed(c[0], c[1]) && typ === k.X.type.pb && pathDirOk(c[0], c[1], ddx, ddz)) {
+        cand.push([c[0], c[1], c[2]]);
+      } else {
         dropped++;
         lines.push("DROP " + c[0] + "," + c[1] + " " + c[2] + " F=" + typ);
       }
     }
+    live = [];
+    for (i = 0; i < cand.length; i++) {
+      if (!live.length) { live.push(cand[i]); continue; }
+      p = live[live.length - 1];
+      nxt = cand[i];
+      ddx = nxt[0] - p[0]; ddz = nxt[1] - p[1];
+      if (((Math.abs(ddx) === 3 && ddz === 0) || (Math.abs(ddz) === 3 && ddx === 0)) && segmentClear(p[0], p[1], nxt[0], nxt[1])) {
+        live.push(nxt);
+      } else if (segmentClear(p[0], p[1], nxt[0], nxt[1])) {
+        fill = bfsTo(p[0], p[1], [nxt]);
+        if (fill && fill.length >= 2) {
+          for (j = 1; j < fill.length; j++) live.push([fill[j][0], fill[j][1], nxt[2] || "path"]);
+        } else live.push(nxt);
+      } else {
+        fill = bfsTo(p[0], p[1], [nxt]);
+        if (fill && fill.length >= 2) {
+          for (j = 1; j < fill.length; j++) live.push([fill[j][0], fill[j][1], nxt[2] || "path"]);
+        } else {
+          dropped++;
+          lines.push("GAP " + p[0] + "," + p[1] + "->" + nxt[0] + "," + nxt[1]);
+        }
+      }
+    }
     if (live.length >= 8) RING = live;
     SB.dropped = dropped;
+    SB.bl = blacklist.length;
     return lines;
   }
 
@@ -294,7 +412,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v21 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v22 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -515,15 +633,51 @@
   }
 
   function pickStartRoute(px, pz) {
-    var i, path;
-    if (Math.hypot(px, pz) < 5) {
-      for (i = 0; i < START_CANDIDATES.length; i++) {
-        if (pathClear(START_CANDIDATES[i])) return START_CANDIDATES[i].map(function (p) { return [p[0], p[1]]; });
-      }
+    var i, path, ends;
+    for (i = 0; i < START_CANDIDATES.length; i++) {
+      if (pathClear(START_CANDIDATES[i])) return START_CANDIDATES[i].map(function (p) { return [p[0], p[1]]; });
     }
-    path = bfsTo(px, pz, RING);
+    ends = [[24, 0], [0, 24], [-24, 0], [0, -24]];
+    path = bfsTo(px, pz, ends);
     if (path && path.length) return path;
-    return [[24, 0]];
+    return START_CANDIDATES[0].map(function (p) { return [p[0], p[1]]; });
+  }
+  function ringIndexAt(x, z) {
+    var i, d;
+    for (i = 0; i < RING.length; i++) {
+      d = Math.hypot(RING[i][0] - x, RING[i][1] - z);
+      if (d < 0.8) return i;
+    }
+    return -1;
+  }
+  function joinRingAtEnd(endx, endz) {
+    var i = ringIndexAt(endx, endz);
+    if (i < 0) i = ringIndexNear(endx, endz);
+    onRing = true;
+    SB.wi = i;
+    SB.state = "loop";
+    joinEnd = [endx, endz];
+  }
+  function innerShortcut(px, pz, enemies) {
+    var c = cellOf(px, pz), tries = [], i, n, j, e, blocked, h, best = null, bestH = Math.hypot(px, pz);
+    tries.push([c[0] - 3 * (c[0] > 0 ? 1 : c[0] < 0 ? -1 : 0), c[1]]);
+    tries.push([c[0], c[1] - 3 * (c[1] > 0 ? 1 : c[1] < 0 ? -1 : 0)]);
+    var nbs = neighborsF(c[0], c[1]);
+    for (i = 0; i < nbs.length; i++) tries.push(nbs[i]);
+    for (i = 0; i < tries.length; i++) {
+      n = tries[i];
+      if (!isPb(n[0], n[1])) continue;
+      if (!segmentClear(px, pz, n[0], n[1]) && !nextStepToward(px, pz, n[0], n[1])) continue;
+      h = Math.hypot(n[0], n[1]);
+      if (h >= bestH - 0.4) continue;
+      blocked = false;
+      for (j = 0; j < enemies.length; j++) {
+        e = enemies[j].mesh.position;
+        if (Math.hypot(e.x - n[0], e.z - n[1]) < 2.0) { blocked = true; break; }
+      }
+      if (!blocked && h < (best ? Math.hypot(best[0], best[1]) : 1e9)) best = n;
+    }
+    return best;
   }
 
   function ringIndexNear(x, z) {
@@ -616,7 +770,6 @@
   }
   function logDeath(reason) {
     if (deathLogged) return;
-    deathLogged = true;
     var src = lastAlivePos || { x: SB.px, z: SB.pz, y: 0, dx: vel[0], dz: vel[1] };
     var rec = {
       x: +(+src.x).toFixed(2), z: +(+src.z).toFixed(2), y: +(+src.y || 0).toFixed(2),
@@ -624,8 +777,15 @@
       reason: reason || "die", score: SB.score, wave: SB.wave,
       state: SB.state, wp: SB.wp, t: Date.now()
     };
+    var last = SB.deaths[SB.deaths.length - 1];
+    if (last && rec.t - (last.t || 0) < 2000 && Math.hypot(rec.x - last.x, rec.z - last.z) < 0.6) {
+      deathLogged = true;
+      return;
+    }
+    deathLogged = true;
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
+    if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
     trail.push({ t: t0, x: +p.x, z: +p.z, y: +p.y, dx: vel[0], dz: vel[1] });
@@ -671,6 +831,7 @@
       "wave   " + SB.wave + "   score " + SB.score + "\n" +
       "near   " + SB.nearest.toFixed(1) + "  enm " + SB.enemies + "  fire " + SB.fireballs + "\n" +
       "atk    " + (SB.attack ? "YES" : "no") + "  blade " + SB.blade + "  tick " + SB.tick.toFixed(0) + "\n" +
+      "bl     " + (SB.bl || 0) + " segs  drop " + (SB.dropped || 0) + "\n" +
       (SB.sanity ? "map    " + SB.sanity + "\n" : "") +
       (SB.err ? "ERR    " + SB.err + "\n" : "") +
       "--- Läufe ---\n" + runs + "\n" +
@@ -704,7 +865,7 @@
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 5000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 21, t: now });
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 22, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -731,9 +892,11 @@
     trail = []; speedHist = [];
     stuckSince = 0; waitUntil = 0; guardUntil = 0; reverseUntil = 0; antiT = 0;
     loopDir = 1; onRing = false; holdUntil = 0;
+    lastSegA = null; lastSegB = null;
     if (k && k.X) runtimeSelfCheck();
     route = pickStartRoute(p.x, p.z);
     routeI = 0;
+    joinEnd = (route.length ? route[route.length - 1] : [24, 0]).slice(0, 2);
     SB.state = "start";
     releaseAllKeys(true);
     focusCanvas();
@@ -746,8 +909,7 @@
   function tryAltDir(px, pz, tx, tz, t0) {
     var candidates = [
       [tx - px, tz - pz],
-      [3, 0], [-3, 0], [0, 3], [0, -3],
-      [3, 3], [3, -3], [-3, 3], [-3, -3]
+      [3, 0], [-3, 0], [0, 3], [0, -3]
     ];
     var i, dx, dz, len, nx, nz, best = null, bestDot = -1e9, dot, towardX = tx - px, towardZ = tz - pz, tlen;
     tlen = Math.hypot(towardX, towardZ) || 1;
@@ -764,6 +926,21 @@
     }
     if (best) holdKa(chooseKa(best[0], best[1], t0, true), t0);
     return !!best;
+  }
+
+  function applyVia(px, pz, tx, tz) {
+    var nxt = nextStepToward(px, pz, tx, tz);
+    if (nxt) return nxt;
+    return [tx, tz];
+  }
+  function centrelineBias(px, pz, ax, az, bx, bz, vx, vz) {
+    var dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz);
+    if (L < 0.2) return [vx, vz];
+    var ux = dx / L, uz = dz / L;
+    var pxp = -uz, pzp = ux;
+    var cte = (px - ax) * pxp + (pz - az) * pzp;
+    if (Math.abs(cte) < 0.25) return [vx, vz];
+    return [vx - pxp * cte * 1.6, vz - pzp * cte * 1.6];
   }
 
   function step(t0) {
@@ -800,20 +977,14 @@
     var here = cellOf(p.x, p.z);
 
     if (!onRing) {
-      if (!route.length) { route = pickStartRoute(p.x, p.z); routeI = 0; }
+      if (!route.length) { route = pickStartRoute(p.x, p.z); routeI = 0; joinEnd = route[route.length - 1] || [24, 0]; }
       while (routeI < route.length && Math.hypot(route[routeI][0] - p.x, route[routeI][1] - p.z) < ARRIVE) routeI++;
-      if (routeI >= route.length || (route.length && Math.hypot(route[route.length - 1][0] - p.x, route[route.length - 1][1] - p.z) < 2.2)) {
-        onRing = true;
-        SB.wi = ringIndexNear(p.x, p.z);
-        SB.state = "loop";
+      var end = joinEnd || route[route.length - 1] || [24, 0];
+      if (routeI >= route.length || Math.hypot(end[0] - p.x, end[1] - p.z) < ARRIVE) {
+        joinRingAtEnd(end[0], end[1]);
       }
     }
     if (onRing) {
-      var nearI = ringIndexNear(p.x, p.z);
-      var nearC = ringCell(nearI);
-      if (Math.hypot(nearC[0] - p.x, nearC[1] - p.z) > 2.4) {
-        SB.wi = nearI;
-      }
       var cur = ringCell(SB.wi);
       if (cur && Math.hypot(cur[0] - p.x, cur[1] - p.z) < ARRIVE) {
         SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
@@ -822,24 +993,15 @@
 
     var tgt = currentTarget();
     var tx = tgt[0], tz = tgt[1];
+    var segFrom = onRing ? ringCell(SB.wi - loopDir) : (routeI > 0 && route[routeI - 1] ? route[routeI - 1] : here);
 
     if (safetyBad(p.x, p.z) || !isPb(p.x, p.z)) {
       guardUntil = t0 + 0.2;
     }
     if (t0 < guardUntil) {
-      var safeT = onRing ? ringCell(SB.wi) : (route[Math.min(routeI, Math.max(0, route.length - 1))] || [24, 0]);
-      if (onRing && Math.hypot(ringCell(ringIndexNear(p.x, p.z))[0] - p.x, ringCell(ringIndexNear(p.x, p.z))[1] - p.z) < Math.hypot(safeT[0] - p.x, safeT[1] - p.z) + 0.4) {
-        safeT = ringCell(ringIndexNear(p.x, p.z));
-      }
-      tx = safeT[0]; tz = safeT[1];
-      if (!isPb(tx, tz) || !segmentClear(p.x, p.z, p.x + (tx - p.x) * 0.4, p.z + (tz - p.z) * 0.4)) {
-        var nbs = neighborsF(p.x, p.z), ni, bestN = null, bestNd = 1e9, dd;
-        for (ni = 0; ni < nbs.length; ni++) {
-          dd = Math.hypot(nbs[ni][0] - tx, nbs[ni][1] - tz);
-          if (dd < bestNd) { bestNd = dd; bestN = nbs[ni]; }
-        }
-        if (bestN) { tx = bestN[0]; tz = bestN[1]; }
-      }
+      var safeT = onRing ? ringCell(SB.wi) : (route[Math.min(routeI, Math.max(0, route.length - 1))] || joinEnd || [24, 0]);
+      var via = applyVia(p.x, p.z, safeT[0], safeT[1]);
+      tx = via[0]; tz = via[1];
       SB.state = onRing ? "loop" : "start";
     }
 
@@ -856,25 +1018,51 @@
     }
 
     var ahead = enemyAhead(p.x, p.z, tx, tz, enemies, 4);
-    if (ahead) {
-      if (t0 >= reverseUntil && onRing) {
+    if (ahead && onRing) {
+      var opp = ringCell(SB.wi - loopDir);
+      var otherAhead = enemyAhead(p.x, p.z, opp[0], opp[1], enemies, 4);
+      if (otherAhead) {
+        var inner = innerShortcut(p.x, p.z, enemies);
+        if (inner) {
+          var iv = applyVia(p.x, p.z, inner[0], inner[1]);
+          tx = iv[0]; tz = iv[1];
+          SB.state = "shortcut";
+        } else if (k.i && k.i.Rb >= 0) {
+          useZeitklingen();
+          SB.state = "blade";
+        } else {
+          var esc2 = walkableEscape(p.x, p.z, enemies);
+          if (esc2.length) {
+            var ev = applyVia(p.x, p.z, esc2[0][0], esc2[0][1]);
+            tx = ev[0]; tz = ev[1];
+            SB.state = "dodge";
+          } else {
+            pulseAttack(t0);
+            SB.state = "cornered";
+          }
+        }
+      } else if (t0 >= reverseUntil) {
         loopDir *= -1;
         reverseUntil = t0 + 1.8;
         SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
         tgt = currentTarget();
-        tx = tgt[0]; tz = tgt[1];
-        SB.state = "reverse";
-      } else if (t0 < reverseUntil && onRing) {
+        var rv = applyVia(p.x, p.z, tgt[0], tgt[1]);
+        tx = rv[0]; tz = rv[1];
         SB.state = "reverse";
       } else {
-        var esc = walkableEscape(p.x, p.z, enemies);
-        if (!esc.length) {
-          pulseAttack(t0);
-          SB.state = "cornered";
-        } else {
-          tx = esc[0][0]; tz = esc[0][1];
-          SB.state = "dodge";
-        }
+        SB.state = "reverse";
+        var rv2 = applyVia(p.x, p.z, tx, tz);
+        tx = rv2[0]; tz = rv2[1];
+      }
+    } else if (ahead && !onRing) {
+      var esc = walkableEscape(p.x, p.z, enemies);
+      if (!esc.length) {
+        pulseAttack(t0);
+        SB.state = "cornered";
+      } else {
+        var evs = applyVia(p.x, p.z, esc[0][0], esc[0][1]);
+        tx = evs[0]; tz = evs[1];
+        SB.state = "dodge";
       }
     } else if (t0 < reverseUntil && onRing) {
       SB.state = "reverse";
@@ -898,15 +1086,25 @@
       }
     }
 
+    var viaT = applyVia(p.x, p.z, tx, tz);
+    tx = viaT[0]; tz = viaT[1];
+    lastSegA = [segFrom[0], segFrom[1]];
+    lastSegB = [tx, tz];
+
     var vx = tx - p.x, vz = tz - p.z;
+    if (onRing && segFrom) {
+      var biased = centrelineBias(p.x, p.z, segFrom[0], segFrom[1], tx, tz, vx, vz);
+      vx = biased[0]; vz = biased[1];
+    }
     var stepLen = Math.hypot(vx, vz) || 1;
     var nextX = p.x + (vx / stepLen) * 0.8;
     var nextZ = p.z + (vz / stepLen) * 0.8;
     if (!isPb(nextX, nextZ) || !segmentClear(p.x, p.z, nextX, nextZ)) {
-      var pull = onRing ? ringCell(ringIndexNear(p.x, p.z)) : here;
-      if (!onRing || (isDoorCell(here[0], here[1]) || !isPb(here[0], here[1]))) pull = ringCell(ringIndexNear(p.x, p.z));
-      vx = pull[0] - p.x;
-      vz = pull[1] - p.z;
+      var pull = onRing ? ringCell(SB.wi) : (joinEnd || here);
+      if (!isPb(pull[0], pull[1])) pull = here;
+      var pv = applyVia(p.x, p.z, pull[0], pull[1]);
+      vx = pv[0] - p.x;
+      vz = pv[1] - p.z;
     }
 
     var idx = chooseKa(vx, vz, t0, false);
@@ -930,13 +1128,17 @@
           if (onRing) SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
           else {
             routeI++;
-            if (routeI >= route.length) { onRing = true; SB.wi = ringIndexNear(p.x, p.z); SB.state = "loop"; }
+            var end2 = joinEnd || (route.length ? route[route.length - 1] : [24, 0]);
+            if (routeI >= route.length || Math.hypot(end2[0] - p.x, end2[1] - p.z) < ARRIVE) {
+              joinRingAtEnd(end2[0], end2[1]);
+            }
           }
           var nt = currentTarget();
-          if (!tryAltDir(p.x, p.z, nt[0], nt[1], t0)) {
-            holdKa(chooseKa(nt[0] - p.x, nt[1] - p.z, t0, true), t0);
+          var nv = applyVia(p.x, p.z, nt[0], nt[1]);
+          if (!tryAltDir(p.x, p.z, nv[0], nv[1], t0)) {
+            holdKa(chooseKa(nv[0] - p.x, nv[1] - p.z, t0, true), t0);
           }
-          SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + "unstick " + nt[0] + "," + nt[1];
+          SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + "unstick " + nv[0] + "," + nv[1];
         } else SB.stuck = 0;
         antiT = t0; antiX = p.x; antiZ = p.z;
       }
@@ -946,7 +1148,6 @@
     }
     prevPos = [p.x, p.z, t0, p.y];
   }
-
 
   function tick() {
     if (stopped) return;
@@ -965,10 +1166,20 @@
       if ((lastHp > 0 && hpNow <= 0) || (k.i && k.i.la && !deathLogged)) logDeath(classifyDeath(SB.px, SB.pz));
       var p = playerPos();
       var running = inRound();
-      if (running && (SB._alive !== true || (lastHp <= 0 && hpNow > 0) || (k.i && k.i.Ta === false && SB.state === "falling"))) {
-        if (p) onNewRound(t0, p);
+      var atSpawn = p && Math.hypot(p.x, p.z) < 6 && (p.y == null || p.y > -1);
+      if (running && atSpawn && (SB._alive !== true || (lastHp <= 0 && hpNow > 0) || (SB.state === "falling" && k.i && k.i.Ta === false))) {
+        onNewRound(t0, p);
         SB._alive = true;
+      } else if (running && SB._alive !== true && p && !atSpawn) {
+        var recov = bfsTo(p.x, p.z, RING);
+        if (recov && recov.length) { route = recov; routeI = 0; onRing = false; joinEnd = recov[recov.length - 1]; }
+        else { onRing = true; SB.wi = ringIndexNear(p.x, p.z); }
+        SB.state = onRing ? "loop" : "start";
+        SB._alive = true;
+      } else if (running && SB.state === "falling" && k.i && k.i.Ta === false && !atSpawn) {
+        SB.state = onRing ? "loop" : "start";
       }
+      if (running) SB._alive = true;
       lastHp = hpNow;
       if (!running) {
         if (k && k.i && (k.i.la || hpNow <= 0) && !deathLogged) logDeath(classifyDeath(SB.px, SB.pz));
@@ -992,6 +1203,12 @@
 
   function boot() {
     ensureOverlay();
+    try {
+      var prev = (TOP.__SB && TOP.__SB.deaths) || [];
+      seedBlacklistFromDeaths(prevDeaths);
+      seedBlacklistFromDeaths(loadDeaths());
+      SB.bl = blacklist.length;
+    } catch (e) {}
     renderOverlay();
     gw = findGameWindow();
     if (gw) k = gw.k || null;
