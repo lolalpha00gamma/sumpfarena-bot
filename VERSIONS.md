@@ -16,6 +16,7 @@ Sim protocol (all numbers below): 11 trials, cap 2400 s, target wave 13, seeds `
 | v34 | `main` (file `sumpfarena-bot-v34.js`) | Built on v33. Real game-over run counting (i-frame blink no longer opens a “run”), HP/death recording each frame, one autosave per 10 real game-overs, tighter blade policy, noodle cooldown. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@69863f79e62a97188fbb28fab6fc992ef0b3fa02/sumpfarena-bot-v34.js` |
 | v35 | `main` (file `sumpfarena-bot-v35.js`) | Built on v34. Wave 19–35 support: null `'22'` / WebGL-loss recovery, full per-run reset, capped logs, hold-spike max-wait that does not depend on padKey, dodge-orb that refuses an axe’s reach, no lure-spike into fireballs, outward recover-ring instead of stay-ring cuts. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@a7a9f49110f28853a336282f145032ebe4ef8942/sumpfarena-bot-v35.js` |
 | v36 | `main` (file `sumpfarena-bot-v36.js`) | v34 behaviour plus only WebGL/'22' stability, per-run reset, capped logs, hold-spike stuck timer (safe ≥ 0.35), dodge-orb reject of axe/boss reach ≤ 3.5, no lure-spike with a fireball < 8, off-ring recover outward. Blade/noodle policy unchanged. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@84f94239e91775aa54e238f7ff0f60f5ccac0fd2/sumpfarena-bot-v36.js` |
+| v37 | `main` (file `sumpfarena-bot-v37.js`) | v36 plus: do not stand still in hold-spike/wait states when a shield/axe/boss is within ~4; attack, sidestep along the ring, or use red/green if held; hug the outer lip toward 24. Cheap late-wave radius scale from wave 26. Blade/noodle policy otherwise unchanged. | `PINNED_AFTER_PUSH` |
 
 The v32 files on `main` are at commit `97d04b89a1d6c9020fa617a9e9a7823d4e334788`.
 
@@ -262,3 +263,37 @@ No spike deaths on 1/40 (v35 had 2). Mean is 0.17 below v34; ≥ counts match.
 v36 clears the hitch water at (−22.5, 8.7) but is slightly behind on mean. Neither build reached ≥18 in sim.
 
 **Stable stays v34.** Rule was: promote v36 if mean ≥ v34 on at least two clocks and no new water/spike deaths. v36 has no new water or spike (hitch water went 1→0) and beats v34 clearly on 1/60, but 1/40 (9.00 vs 9.17) and hitch (13.50 vs 14.67) are both slightly below, so only one clock qualifies. `sumpfarena-bot.js` remains the v34 blob. v36 is the build to test live next for the WebGL/'22' hang and the three v34 live death modes.
+
+## v37 (wave-35 protocol, v36 + hold-spike melee)
+
+v36 live (21:18:37–21:39:50 Europe/Zurich, 23 Nov 2026): one real death at **wave 13 / 2980 / 107**, state `hold-spike`, **enemy/shield** at (−24.03, 15.16) on the west plank (`R38`). Wave 13 is 5 shields + 1 snake. A shield at dist 1.4 hit four times in ~3.5 s while the bot stood at a staging cell (~6 from the pad) and was knocked to the outer lip. Red was skipped (`onTrapState` + global `spikesUp()`). Canvas was stable, jitter 0.62 s, 0 water / 0 spike. Full write-up: `sumpfarena-deaths-v36.md`. The v34 live record (wave 21) still stands.
+
+v37 = v36 plus only that hole: in `hold-spike` / `wait-pad` / other wait states, if a shield/axe/boss is within ~4 (grunt ~3.2; radius `× min(wave/25, 1.5)` from wave 26), do not stand still — attack if in range, sidestep along the ring away from the enemy (on-ring, not into a hot pad, not further outward), or use red/green if held (allowed even in a wait state as long as the bot is not on a pad). If already on the outer lip (`|x|` or `|z|` > 24.08), hug back toward 24. Blade/noodle policy otherwise unchanged. Dump key: `__SB_dump_v37`.
+
+Sim: 6 trials, cap 7000 s, targetW=36.
+
+### 1/60
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v34 | 0 | 0 | 0 | 10.83 | 4 | 2 | 1 | 0 | 0 | 0 | 17 |
+| v36 | 0 | 0 | 0 | **14.00** | **6** | **5** | **3** | 0 | 0 | 0 | 17 |
+| v37 | 0 | 0 | 0 | 13.17 | 5 | 5 | 1 | **1** | 0 | 0 | **18** |
+
+### 1/40
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v34 | 0 | 0 | 0 | 9.17 | 2 | 2 | 1 | 0 | 0 | 0 | 15 |
+| v36 | 0 | 0 | 0 | 9.00 | 2 | 2 | 1 | 0 | 0 | 0 | 15 |
+| v37 | 0 | 0 | 0 | **14.67** | **5** | **5** | **2** | **1** | 0 | 0 | **21** |
+
+### Hitch 8%
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v34 | **1** | 0 | 0 | **14.67** | **6** | **6** | **3** | 0 | 0 | 0 | 16 |
+| v36 | 0 | 0 | 0 | 13.50 | **6** | 4 | 2 | 0 | 0 | 0 | 16 |
+| v37 | 0 | 0 | 0 | **14.67** | 5 | 5 | **3** | **1** | 0 | 0 | **24** |
+
+v37 is **not worse**: 0 water / 0 spike / 0 arrow on all clocks, first ≥18 on every clock (hitch max 24, 1/40 max 21). Mean is slightly below v36 on 1/60 (13.17 vs 14.00) but well above v34, and well above both on 1/40; hitch ties v34’s mean with no water. Stable stays v34 (not re-evaluated here). v37 is the build to test live next for the wave-13 hold-spike shield death.
