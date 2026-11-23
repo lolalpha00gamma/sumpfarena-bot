@@ -93,8 +93,8 @@
   var MIN_HOLD = 0.35;
   var ARRIVE = 0.55;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v25";
-  var LS_DUMP = "__SB_dump_v25";
+  var LS_DEATHS = "__SB_deaths_v27";
+  var LS_DUMP = "__SB_dump_v27";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -123,7 +123,7 @@
   }
 
   var SB = {
-    ver: 25,
+    ver: 27,
     gen: GEN,
     bl: 0,
     runs: prevRuns,
@@ -266,6 +266,88 @@
     var iz = Math.floor((z + 67.5) / 3);
     return [3 * ix - 67.5 + 1.5, 3 * iz - 67.5 + 1.5];
   }
+  function isNarrowPlank(cx, cz) {
+    var horiz = isPb(cx + 3, cz) || isPb(cx - 3, cz);
+    var vert = isPb(cx, cz + 3) || isPb(cx, cz - 3);
+    if (horiz && !vert) return "h";
+    if (vert && !horiz) return "v";
+    return null;
+  }
+  function sharesAxisPts(a, b) {
+    return Math.abs(a[0] - b[0]) < 0.21 || Math.abs(a[1] - b[1]) < 0.21;
+  }
+  function ringAlong(px, pz, dir) {
+    var us = ringIndexNear(px, pz);
+    var cur = ringCell(us);
+    var n = RING.length, steps, i, c, arr = [2, 3, 1, 4];
+    dir = dir || 1;
+    for (i = 0; i < arr.length; i++) {
+      steps = arr[i];
+      c = ringCell(((us + dir * steps) % n + n) % n);
+      if (!sharesAxisPts(cur, c)) continue;
+      return { x: c[0], z: c[1] };
+    }
+    return { x: cur[0], z: cur[1] };
+  }
+  function axisKeysTo(px, pz, tx, tz) {
+    var keys = emptyKeys();
+    if (Math.abs(tx - px) >= Math.abs(tz - pz)) {
+      if (tx - px > 0.08) keys.ArrowRight = 1;
+      else if (tx - px < -0.08) keys.ArrowLeft = 1;
+    } else {
+      if (tz - pz > 0.08) keys.ArrowDown = 1;
+      else if (tz - pz < -0.08) keys.ArrowUp = 1;
+    }
+    return keys;
+  }
+  function onOuterRing(tx, tz) {
+    return Math.abs(Math.abs(tx) - 24) < 0.3 || Math.abs(Math.abs(tz) - 24) < 0.3;
+  }
+  function clampPlankKeys(px, pz, keys) {
+    var k = emptyKeys(), n;
+    for (n in keys) if (keys[n]) k[n] = 1;
+    var c = cellOf(px, pz);
+    var kind = isNarrowPlank(c[0], c[1]);
+    if (!kind) return k;
+    var margin = 1.12;
+    if (kind === "v") {
+      if (px <= c[0] - margin) k.ArrowLeft = 0;
+      if (px >= c[0] + margin) k.ArrowRight = 0;
+      if (Math.abs(px - c[0]) > 0.12) {
+        if (c[0] > px + 0.08) k.ArrowRight = 1;
+        else if (c[0] < px - 0.08) k.ArrowLeft = 1;
+      }
+    } else {
+      if (pz <= c[1] - margin) k.ArrowUp = 0;
+      if (pz >= c[1] + margin) k.ArrowDown = 0;
+      if (Math.abs(pz - c[1]) > 0.12) {
+        if (c[1] > pz + 0.08) k.ArrowDown = 1;
+        else if (c[1] < pz - 0.08) k.ArrowUp = 1;
+      }
+    }
+    return k;
+  }
+  function clampToRingKeys(px, pz, keys) {
+    var k = emptyKeys(), n;
+    for (n in keys) if (keys[n]) k[n] = 1;
+    var ew = Math.abs(Math.abs(px) - 24);
+    var ns = Math.abs(Math.abs(pz) - 24);
+    var axis;
+    if (ew <= ns && Math.abs(px) > 18) {
+      axis = px >= 0 ? 24 : -24;
+      if (px > axis + 1.12) k.ArrowRight = 0;
+      if (px < axis - 1.12) k.ArrowLeft = 0;
+      if (px > axis + 0.12) k.ArrowLeft = 1;
+      if (px < axis - 0.12) k.ArrowRight = 1;
+    } else if (ns < ew && Math.abs(pz) > 18) {
+      axis = pz >= 0 ? 24 : -24;
+      if (pz > axis + 1.12) k.ArrowDown = 0;
+      if (pz < axis - 1.12) k.ArrowUp = 0;
+      if (pz > axis + 0.12) k.ArrowUp = 1;
+      if (pz < axis - 0.12) k.ArrowDown = 1;
+    }
+    return k;
+  }
   function segmentClear(ax, az, bx, bz) {
     var dist = Math.hypot(bx - ax, bz - az);
     var n = Math.max(1, Math.ceil(dist / 0.5)), i, t, x, z;
@@ -403,7 +485,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v25 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v27 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -758,7 +840,7 @@
         : (ev.nearestFireball < 2.2 ? "fireball"
           : (ev.nearestEnemy.dist < 4 ? "enemy/" + ev.nearestEnemy.type : "unknown")));
     SB.hpEvents = (SB.hpEvents || []).concat([ev]).slice(-24);
-    try { console.log("[SB v25 hp] " + ev.hpBefore + "->" + ev.hpAfter + " " + ev.cause + " (" + ev.x + "," + ev.z + ") " + ev.spikePhase + " enm=" + ev.nearestEnemy.type + "@" + ev.nearestEnemy.dist); } catch (e) {}
+    try { console.log("[SB v27 hp] " + ev.hpBefore + "->" + ev.hpAfter + " " + ev.cause + " (" + ev.x + "," + ev.z + ") " + ev.spikePhase + " enm=" + ev.nearestEnemy.type + "@" + ev.nearestEnemy.dist); } catch (e) {}
     return ev;
   }
 
@@ -954,10 +1036,48 @@
       setTimeout(function () { try { key("Control", false, true); } catch (e2) {} }, 80);
     } catch (e3) {}
   }
+  function isFrozen() {
+    try { return !!(k && k.i && k.i.va && k.i.Da === k.i.va.stop); } catch (e) { return false; }
+  }
+  function findTank(enemies) {
+    var i, e, pos, name;
+    for (i = 0; i < (enemies || []).length; i++) {
+      e = enemies[i];
+      name = enemyName(e);
+      if (name !== "axe" && name !== "boss" && name !== "boss2") continue;
+      pos = e.mesh && e.mesh.position;
+      if (pos) return { e: e, x: pos.x, z: pos.z, name: name };
+    }
+    return null;
+  }
   function maybeUseBlade(px, pz, enemies) {
     if (!k || !k.i || k.i.Rb < 0) return;
-    if (!(SB.nearest <= 4 && k.i.Y <= 3)) return;
-    useZeitklingen();
+    var color = k.i.Rb;
+    var onTrap = isSpikeCell(px, pz) || /^(time-spike|hold-spike|retreat-spike|time-dart)$/.test(SB.state || "");
+    var tank = findTank(enemies);
+    var nearDeath = k.i.Y <= 2 && SB.nearest <= 2.4;
+    var d = tank ? Math.hypot(tank.x - px, tank.z - pz) : 99;
+    var trashN = 0, nearestTrash = 99, ti, tpos, tname;
+    for (ti = 0; ti < (enemies || []).length; ti++) {
+      tname = enemyName(enemies[ti]);
+      if (tname === "axe" || tname === "boss" || tname === "boss2") { trashN = 99; break; }
+      tpos = enemies[ti].mesh && enemies[ti].mesh.position;
+      if (!tpos) continue;
+      trashN++;
+      d = Math.hypot(tpos.x - px, tpos.z - pz);
+      if (d < nearestTrash) nearestTrash = d;
+    }
+    var leftoverTrash = trashN >= 1 && trashN <= 2;
+    if (color === 1) {
+      if (nearDeath || (tank && d < 8 && !onTrap) || (tank && d < 10 && !onTrap && SB.state === "hunt-axe") ||
+          (leftoverTrash && nearestTrash < 10 && !onTrap)) useZeitklingen();
+      return;
+    }
+    if (onTrap) return;
+    if (color === 3 || color === 2) { useZeitklingen(); return; }
+    if (color === 0 && tank) { useZeitklingen(); return; }
+    if (color === 0 && leftoverTrash) { useZeitklingen(); return; }
+    if (color === 0 && SB.nearest <= 4 && k.i.Y <= 3) useZeitklingen();
   }
 
   function classifyDeath(px, pz) {
@@ -994,7 +1114,7 @@
     };
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
-    try { console.log("[SB v25 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
+    try { console.log("[SB v27 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -1083,7 +1203,7 @@
     try {
       var n = 0, i, r, name, blob, a, doc, url;
       for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 25) n++; }
-      name = "sumpfarena-v25-log-" + n + ".json";
+      name = "sumpfarena-v27-log-" + n + ".json";
       blob = new Blob([JSON.stringify(logPayload())], { type: "application/json" });
       doc = TOP.document;
       a = doc.createElement("a");
@@ -1115,7 +1235,7 @@
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 8000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 25, t: now });
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 27, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -1269,7 +1389,7 @@
       var inner = innerSafeCell(p.x, p.z, enemies);
       if (inner) { tx = inner[0]; tz = inner[1]; SB.state = "yield"; holdYieldUntil = t0 + 0.9; }
       else { SB.state = "yield"; holdYieldUntil = t0 + 0.5; }
-      if (k && k.i && k.i.Rb >= 0) useZeitklingen();
+      if (k && k.i && k.i.Rb >= 0 && k.i.Rb !== 1) useZeitklingen();
     } else if (t0 < holdYieldUntil) {
       SB.state = "yield";
     } else if (ahead) {
@@ -1284,7 +1404,7 @@
           SB.state = "yield";
           holdYieldUntil = t0 + 0.5;
         }
-        if (k && k.i && k.i.Rb >= 0 && k.i.Y <= 3) useZeitklingen();
+        if (k && k.i && k.i.Rb >= 0 && k.i.Rb !== 1 && k.i.Y <= 3) useZeitklingen();
       } else if (t0 >= reverseUntil && onRing) {
         loopDir *= -1;
         latKey = null;
@@ -1393,6 +1513,129 @@
       }
     }
 
+    // v26/v27: hunt the axe along the ring when holding red (or already frozen).
+    // Never cut a corner: only retarget a ring cell that shares an axis with us.
+    var tank = findTank(enemies);
+    if (tank && (k.i.Rb === 1 || isFrozen()) && !hasFire) {
+      var dTank = Math.hypot(tank.x - p.x, tank.z - p.z);
+      var frozen = isFrozen();
+      var snakeClose = false, s2, spos2;
+      for (s2 = 0; s2 < enemies.length; s2++) {
+        spos2 = enemies[s2].mesh && enemies[s2].mesh.position;
+        if (spos2 && enemyName(enemies[s2]) === "snake" && Math.hypot(spos2.x - p.x, spos2.z - p.z) < 6.5) snakeClose = true;
+      }
+      if (frozen || !snakeClose) {
+        if (frozen && dTank < 3.5) pulseAttack(t0);
+        var usI = ringIndexNear(p.x, p.z);
+        var themI = ringIndexNear(tank.x, tank.z);
+        var nRi = RING.length;
+        var dir0 = loopDir || 1;
+        var fwd = ((themI - usI) * dir0 % nRi + nRi) % nRi;
+        var dirH = fwd <= nRi - fwd ? dir0 : -dir0;
+        var nextI = (usI + dirH + nRi) % nRi;
+        var cH = ringCell(nextI);
+        var nextIsCluster = isSpikeCell(cH[0], cH[1]) || cH[2] === "spike" || cH[2] === "blade";
+        var uc = cellOf(p.x, p.z);
+        function sharesAxis(ax, az) {
+          var tc = cellOf(ax, az);
+          return Math.abs(tc[0] - uc[0]) < 0.2 || Math.abs(tc[1] - uc[1]) < 0.2;
+        }
+        if (frozen && dTank < 6) {
+          var Lh = dTank || 1;
+          var sx = tank.x - ((tank.x - p.x) / Lh) * 2.15;
+          var sz = tank.z - ((tank.z - p.z) / Lh) * 2.15;
+          if (!isPb(sx, sz) || isSpikeCell(sx, sz) || !sharesAxis(sx, sz)) { sx = uc[0]; sz = uc[1]; }
+          var fallK = { ArrowUp: 0, ArrowDown: 0, ArrowLeft: 0, ArrowRight: 0 };
+          if (Math.abs(sx - p.x) >= Math.abs(sz - p.z)) {
+            if (sx - p.x > 0.08) fallK.ArrowRight = 1; else if (sx - p.x < -0.08) fallK.ArrowLeft = 1;
+          } else {
+            if (sz - p.z > 0.08) fallK.ArrowDown = 1; else if (sz - p.z < -0.08) fallK.ArrowUp = 1;
+          }
+          if (!wouldFallKeys(p.x, p.z, fallK, 0.5)) {
+            tx = sx; tz = sz; seekDirect = true; SB.state = "freeze-melee";
+          } else SB.state = "freeze-melee";
+        } else if ((frozen || !nextIsCluster) && sharesAxis(cH[0], cH[1])) {
+          tx = cH[0]; tz = cH[1]; seekDirect = true; SB.state = frozen ? "freeze-melee" : "hunt-axe";
+        } else {
+          SB.state = frozen ? "freeze-melee" : "hunt-axe";
+        }
+      }
+    }
+
+    // v27: abort standing lure when a snake is in 6.5 (unless a lone leftover);
+    // stay on the outer ring (no off-axis / inner cuts); finish leftover trash
+    // with red / a 3-wide jab; centre-hug 1-cell planks and recover from a
+    // knock onto a 3-wide outer column.
+    (function () {
+      var ei, pos, name, d, lite = [], sn = null, leftover, prey, trashPair, dest, trial, frozen, c0, wide;
+      var us, them, nR, dir0, fwd, dirA, curCell, targetOffAxis, kind, threatNear, off;
+      for (ei = 0; ei < enemies.length; ei++) {
+        pos = enemies[ei].mesh && enemies[ei].mesh.position;
+        if (!pos) continue;
+        name = enemyName(enemies[ei]);
+        d = Math.hypot(pos.x - p.x, pos.z - p.z);
+        lite.push({ type: name, x: pos.x, z: pos.z, d: d });
+        if (name === "snake" && d < 6.5 && !sn) sn = { x: pos.x, z: pos.z, d: d };
+      }
+      leftover = lite.length === 1 && lite[0].type !== "axe" && lite[0].type !== "boss" && lite[0].type !== "boss2";
+      prey = leftover ? lite[0] : null;
+      trashPair = !leftover && lite.length === 2;
+      if (trashPair) {
+        for (ei = 0; ei < lite.length; ei++) {
+          if (lite[ei].type === "axe" || lite[ei].type === "boss" || lite[ei].type === "boss2") { trashPair = false; break; }
+        }
+      }
+      if (SB.state === "lure-spike" && sn && !leftover) {
+        d = Math.hypot(p.x - tx, p.z - tz);
+        if (d < 0.8) {
+          dest = ringAlong(p.x, p.z, loopDir || 1);
+          trial = axisKeysTo(p.x, p.z, dest.x, dest.z);
+          if (!wouldFallKeys(p.x, p.z, trial, 0.45)) {
+            tx = dest.x; tz = dest.z; seekDirect = true; SB.state = "abort-lure";
+          }
+        }
+      }
+      frozen = isFrozen();
+      if (prey) {
+        if (frozen && prey.d < 3.5) pulseAttack(t0);
+        if (frozen) {
+          us = ringIndexNear(p.x, p.z);
+          them = ringIndexNear(prey.x, prey.z);
+          nR = RING.length;
+          dir0 = loopDir || 1;
+          fwd = ((them - us) * dir0 % nR + nR) % nR;
+          dirA = fwd <= nR - fwd ? dir0 : -dir0;
+          dest = ringAlong(p.x, p.z, dirA);
+          trial = axisKeysTo(p.x, p.z, dest.x, dest.z);
+          if (!wouldFallKeys(p.x, p.z, trial, 0.5) && onOuterRing(dest.x, dest.z)) {
+            tx = dest.x; tz = dest.z; seekDirect = true; SB.state = "leftover-melee";
+          }
+        } else {
+          c0 = cellOf(p.x, p.z);
+          wide = !isNarrowPlank(c0[0], c0[1]);
+          if (wide && prey.d < 2.8) pulseAttack(t0);
+        }
+      }
+      if (trashPair) {
+        lite.sort(function (a, b) { return a.d - b.d; });
+        if (frozen && lite[0].d < 3.5) pulseAttack(t0);
+        else {
+          c0 = cellOf(p.x, p.z);
+          if (!isNarrowPlank(c0[0], c0[1]) && lite[0].d < 2.8) pulseAttack(t0);
+        }
+      }
+      curCell = cellOf(p.x, p.z);
+      targetOffAxis = !sharesAxisPts([p.x, p.z], [tx, tz]) && !sharesAxisPts(curCell, [tx, tz]);
+      if (!onOuterRing(tx, tz) || targetOffAxis) {
+        dest = ringAlong(p.x, p.z, loopDir || 1);
+        trial = axisKeysTo(p.x, p.z, dest.x, dest.z);
+        if (!wouldFallKeys(p.x, p.z, trial, 0.45)) {
+          tx = dest.x; tz = dest.z; seekDirect = true; SB.state = "stay-ring";
+        }
+      }
+      SB._v27lite = lite;
+    })();
+
     lastSegA = seekDirect ? [p.x, p.z] : (onRing ? ringCell(SB.wi - loopDir) : (routeI > 0 && route[routeI - 1] ? route[routeI - 1] : [p.x, p.z]));
     lastSegB = [tx, tz];
 
@@ -1401,6 +1644,23 @@
       if (Math.abs(tx - p.x) >= Math.abs(tz - p.z)) { followKeys.ArrowUp = 0; followKeys.ArrowDown = 0; }
       else { followKeys.ArrowLeft = 0; followKeys.ArrowRight = 0; }
     }
+    (function () {
+      var c = cellOf(p.x, p.z), kind = isNarrowPlank(c[0], c[1]), threatNear = false, off, i, lite = SB._v27lite || [], k2;
+      if (kind) {
+        off = kind === "v" ? Math.abs(p.x - c[0]) : Math.abs(p.z - c[1]);
+        for (i = 0; i < lite.length; i++) {
+          if (lite[i].d < 6) { threatNear = true; break; }
+        }
+        if (threatNear || off > 0.35) {
+          k2 = clampPlankKeys(p.x, p.z, followKeys);
+          if (!wouldFallKeys(p.x, p.z, k2, 0.4)) followKeys = k2;
+        }
+      }
+      if (Math.abs(p.x) > 25.15 || Math.abs(p.z) > 25.15) {
+        k2 = clampToRingKeys(p.x, p.z, followKeys);
+        if (!wouldFallKeys(p.x, p.z, k2, 0.4)) followKeys = k2;
+      }
+    })();
     applyFollowKeys(followKeys, t0);
     maybeUseBlade(p.x, p.z, enemies);
     SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + tx.toFixed(0) + "," + tz.toFixed(0) + " " + (tgt[2] || "");
