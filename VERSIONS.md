@@ -12,7 +12,7 @@ Sim protocol (all numbers below): 11 trials, cap 2400 s, target wave 13, seeds `
 | v32.1 | `v32.1` | Water-edge margin: never correct toward the inner moat; only pull back when already past the outer lip (`|x|` or `|z| > 24.2`) toward the ring line at 24. Plus all shared v32 fixes below. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.1.js` |
 | v32.2 | `v32.2` | Earlier enemy dodging: larger yield radius (6/7), yield = move-away along the ring instead of standing, no cut-inner with an enemy within ~6.5. Plus all shared v32 fixes. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.2.js` |
 | v32.3 | `v32.3` | Both: water-edge margin and earlier enemy dodging, plus all shared v32 fixes. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.3.js` |
-| v33 | `main` (file `sumpfarena-bot-v33.js`) | Built on v32.1. Uses every Zeitklinge colour deliberately (see `sumpfarena-blades.md`). Fixes v32.1 live bugs: death recording, dump heartbeat, spike-gating livelock, stall hunting. | _(filled after push)_ |
+| v33 | `main` (file `sumpfarena-bot-v33.js`) | Built on v32.1. Uses every Zeitklinge colour deliberately (see `sumpfarena-blades.md`). Fixes v32.1 live bugs: death recording, dump heartbeat, spike-gating livelock, stall hunting. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@f75f573ad292205a4053a0811267ead4e1572c72/sumpfarena-bot-v33.js` |
 
 The v32 files on `main` are at commit `97d04b89a1d6c9020fa617a9e9a7823d4e334788`.
 
