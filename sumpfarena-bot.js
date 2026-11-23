@@ -1,10 +1,8 @@
 (function () {
   "use strict";
 
-  // v29: v27 + safe v28 (leave-pad, abort-plank, spike HP attrib) +
-  // lower renderer pixel ratio / no shadows, 4 Hz overlay, no hp console
-  // spam, dt p50/p95/max logged, controller uses measured p95 dt (game
-  // clamps k.delta to 0.1, then pos += v*dt with Ah=8).
+  // v30: v29 + spike hit radius 2.5 (game Db 1+1.5), medusa orb dodge,
+  // noodle/watchdog (3s still + no keys -> loop), keep pr=0.5 and dt-aware.
 
   var TOP = window;
   var GEN = (TOP.__SB_GEN || 0) + 1;
@@ -128,7 +126,7 @@
   }
 
   var SB = {
-    ver: 29,
+    ver: 30,
     gen: GEN,
     bl: 0,
     runs: prevRuns,
@@ -169,6 +167,8 @@
   var lastP50 = 1 / 60, lastP95 = 1 / 60;
   var waveStartedAt = 0, waveSeen = "";
   var holdUntil = -1, holdState = "", holdDest = null, holdDir = 1;
+  var lastMoveT = 0, lastMoveX = null, lastMoveZ = null, noodleSince = 0;
+  var SPIKE_HIT_R = 2.5, SPIKE_SAFE_R = 3.3;
   var liteApplied = false, liteW = 0, liteH = 0;
 
   function noteFrameDt(t0) {
@@ -572,7 +572,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v29 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v30 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -827,7 +827,8 @@
       o = ch[i];
       if (o && (o.Ga === "TRAPSPIKES" || /trapSpikes/i.test(o.name || "")) && o.position) {
         c = cellOf(o.position.x, o.position.z);
-        if (Math.abs(c[0] - cx) < 0.1 && Math.abs(c[1] - cz) < 0.1) return true;
+        var pc = cellOf(cx, cz);
+        if (Math.abs(c[0] - pc[0]) < 0.1 && Math.abs(c[1] - pc[1]) < 0.1) return true;
       }
     }
     return false;
@@ -984,6 +985,9 @@
     }
     return +best.toFixed(2);
   }
+  function inSpikeRadius(px, pz, r) {
+    return nearestSpikePad(px, pz) < (r == null ? SPIKE_HIT_R : r);
+  }
   function recordHpLoss(before, after, px, pz, enemies) {
 
     var ev = {
@@ -1002,9 +1006,9 @@
       nearestFireball: +nearestFireball(px, pz).toFixed(2)
     };
     ev.nearestPad = nearestSpikePad(px, pz);
-    ev.cause = ev.spikeUp && (ev.onSpikePad || ev.nearestPad < 3.6) ? "spike"
+    ev.cause = ev.spikeUp && (ev.onSpikePad || ev.nearestPad < SPIKE_HIT_R + 0.4) ? "spike"
       : (ev.nearestDart < 2.2 ? "dart"
-        : (ev.nearestFireball < 2.2 ? "fireball"
+        : (ev.nearestFireball < 2.2 || ev.amount === 1.5 || (ev.nearestEnemy.type === "medusa" && ev.nearestEnemy.dist <= 13 && ev.nearestEnemy.dist > 3.5) ? "fireball"
           : (ev.nearestEnemy.dist < 4 ? "enemy/" + ev.nearestEnemy.type : "unknown")));
     SB.hpEvents = (SB.hpEvents || []).concat([ev]).slice(-24);
     return ev;
@@ -1281,7 +1285,7 @@
     };
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
-    try { console.log("[SB v29 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
+    try { console.log("[SB v30 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -1404,7 +1408,7 @@
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 8000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 29, t: now });
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 30, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -1426,6 +1430,7 @@
   function onNewRound(t0, p) {
     waveStartedAt = t0; waveSeen = ""; lastFrameT = 0;
     holdUntil = -1; holdState = ""; holdDest = null; holdDir = 1;
+    lastMoveT = t0; lastMoveX = null; lastMoveZ = null; noodleSince = 0;
     SB.rs = t0;
     SB.runKills = 0;
     lastScoreNum = parseInt(SB.score, 10) || 0;
@@ -1551,7 +1556,17 @@
           bestBd = bd; bestB = bowl;
         }
       }
-      if (bestB) { tx = bestB.x; tz = bestB.z; SB.state = "noodle"; }
+      if (bestB) {
+        if (SB.state !== "noodle") noodleSince = t0;
+        if (t0 - noodleSince > 3 && Math.hypot(p.x - bestB.x, p.z - bestB.z) > 1.2) {
+          noodleSince = 0; // stale / blocked — fall through to loop
+        } else {
+          tx = bestB.x; tz = bestB.z; SB.state = "noodle";
+        }
+      } else if (SB.state === "noodle") {
+        noodleSince = 0;
+        SB.state = onRing ? "loop" : "start";
+      }
     }
 
     var ahead = enemyAhead(p.x, p.z, tx, tz, enemies, 4);
@@ -1777,7 +1792,7 @@
         }
       }
       if (!(holdUntil > t0)) {
-        if (onPad && (spikesUp() || knockOff)) {
+        if (inSpikeRadius(p.x, p.z) && (spikesUp() || knockOff || safeTimeRemaining() < Math.max(0.2, (SPIKE_HIT_R + 0.35 - nearestSpikePad(p.x, p.z)) / 8))) {
           var destP = nextSafe();
           var trialP = dirTo(destP[0], destP[1]);
           if (!wouldFallKeys(p.x, p.z, trialP, 0.5) && !wouldFallDt(p.x, p.z, trialP, recentStepDt(), 0.5)) {
@@ -1903,6 +1918,57 @@
       }
     })();
     followKeys = filterLagKeys(p.x, p.z, followKeys);
+    (function () {
+      var moved, keysOn, dest, trial, us, n, dir, s, i, c, np, safe, exitEta;
+      var fi, f, pos, fd, bestF = 99, threat = null, ka, nx, nz, d;
+      moved = lastMoveX == null || Math.hypot(p.x - lastMoveX, p.z - lastMoveZ) > 0.12;
+      if (moved) { lastMoveT = t0; lastMoveX = p.x; lastMoveZ = p.z; }
+      keysOn = !!(followKeys.ArrowUp || followKeys.ArrowDown || followKeys.ArrowLeft || followKeys.ArrowRight);
+      if (!moved && !keysOn && t0 - lastMoveT > 3) {
+        dest = ringAlong(p.x, p.z, loopDir || 1);
+        trial = axisKeysTo(p.x, p.z, dest.x, dest.z);
+        if (!wouldFallKeys(p.x, p.z, trial, 0.4) && !wouldFallDt(p.x, p.z, trial, recentStepDt(), 0.4)) {
+          followKeys = trial; tx = dest.x; tz = dest.z; SB.state = "watchdog";
+          lastMoveT = t0; noodleSince = 0; holdUntil = -1;
+        }
+      }
+      np = nearestSpikePad(p.x, p.z);
+      safe = safeTimeRemaining();
+      exitEta = Math.max(0, (SPIKE_HIT_R + 0.35 - np) / 8);
+      if (np < SPIKE_HIT_R && (spikesUp() || safe < exitEta + 0.08)) {
+        us = ringIndexNear(p.x, p.z); n = RING.length; dir = loopDir || 1; dest = null;
+        for (s = 0; s < 6; s++) {
+          i = ((us + dir * [2, 3, 1, 4, 5, 6][s]) % n + n) % n;
+          c = ringCell(i);
+          if (nearestSpikePad(c[0], c[1]) >= SPIKE_SAFE_R && isPb(c[0], c[1])) { dest = c; break; }
+        }
+        if (dest) {
+          trial = axisKeysTo(p.x, p.z, dest[0], dest[1]);
+          if (!wouldFallKeys(p.x, p.z, trial, 0.4) && !wouldFallDt(p.x, p.z, trial, recentStepDt(), 0.4)) {
+            followKeys = trial; tx = dest[0]; tz = dest[1]; SB.state = "leave-pad";
+          }
+        }
+      }
+      if (k && k.Vc && k.Vc.j) {
+        for (fi = 0; fi < (k.Vc.active || 0); fi++) {
+          f = k.Vc.j[fi];
+          pos = (f && (f.wb || f.position)) || null;
+          if (!pos) continue;
+          fd = Math.hypot(pos.x - p.x, pos.z - p.z);
+          if (fd < 4.5 && fd < bestF) { bestF = fd; threat = pos; }
+        }
+      }
+      if (threat && onOuterLine(p.x, p.z)) {
+        dest = ringAlong(p.x, p.z, loopDir || 1);
+        trial = axisKeysTo(p.x, p.z, dest.x, dest.z);
+        if (trial.ArrowRight) nx = p.x + 0.8; else if (trial.ArrowLeft) nx = p.x - 0.8; else nx = p.x;
+        if (trial.ArrowDown) nz = p.z + 0.8; else if (trial.ArrowUp) nz = p.z - 0.8; else nz = p.z;
+        if (isPb(nx, nz) && onOuterLine(nx, nz) && !wouldFallKeys(p.x, p.z, trial, 0.4)) {
+          followKeys = trial; SB.state = "dodge-orb";
+        }
+      }
+    })();
+        followKeys = filterLagKeys(p.x, p.z, followKeys);
     applyFollowKeys(followKeys, t0);
     maybeUseBlade(p.x, p.z, enemies);
     SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + tx.toFixed(0) + "," + tz.toFixed(0) + " " + (tgt[2] || "");
