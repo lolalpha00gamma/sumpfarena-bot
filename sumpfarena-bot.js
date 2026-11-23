@@ -1,8 +1,9 @@
 (function () {
   "use strict";
 
-  // v30: v29 + spike hit radius 2.5 (game Db 1+1.5), medusa orb dodge,
-  // noodle/watchdog (3s still + no keys -> loop), keep pr=0.5 and dt-aware.
+  // v31: v30 keep pr=0.5, dt-aware, watchdog, noodle abort. Conservative
+  // 2.5-radius spike gating (wait / back away) instead of leave-pad through
+  // the neighbouring corner pad. pathSafeTo uses the 2.5 disk.
 
   var TOP = window;
   var GEN = (TOP.__SB_GEN || 0) + 1;
@@ -126,7 +127,7 @@
   }
 
   var SB = {
-    ver: 30,
+    ver: 31,
     gen: GEN,
     bl: 0,
     runs: prevRuns,
@@ -572,7 +573,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v30 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v31 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -947,9 +948,9 @@
     return (900 - t) / 400;
   }
   function pathSafeTo(px, pz, tx, tz) {
-    var dist = Math.hypot(tx - px, tz - pz), eta = dist / 8, steps, i, x, z;
-    if (isSpikeCell(tx, tz) || isSpikeCell(px, pz)) {
-      if (spikesUp() || safeTimeRemaining() < eta + 0.35) return false;
+    var dist = Math.hypot(tx - px, tz - pz), eta = dist / 8, steps, i, x, z, CROSS = 0.70;
+    if (inSpikeRadius(tx, tz) || inSpikeRadius(px, pz)) {
+      if (spikesUp() || safeTimeRemaining() < Math.max(CROSS, eta + 0.35)) return false;
     }
     if (dartThreatAt(tx, tz, eta)) return false;
     steps = Math.max(2, Math.ceil(dist / 3));
@@ -957,7 +958,7 @@
       x = px + (tx - px) * i / steps;
       z = pz + (tz - pz) * i / steps;
       if (!isPb(x, z)) return false;
-      if (isSpikeCell(x, z) && (spikesUp() || safeTimeRemaining() < eta * (i / steps) + 0.25)) return false;
+      if (inSpikeRadius(x, z) && (spikesUp() || safeTimeRemaining() < Math.max(CROSS, eta * (i / steps) + 0.25))) return false;
     }
     return true;
   }
@@ -1285,7 +1286,7 @@
     };
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
-    try { console.log("[SB v30 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
+    try { console.log("[SB v31 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -1408,7 +1409,7 @@
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 8000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 30, t: now });
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 31, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -1783,23 +1784,16 @@
         }
         return ringCell(us);
       }
+      if (holdState === "leave-pad") { holdUntil = -1; holdDest = null; holdState = ""; }
       if (holdUntil > t0 && holdDest) {
         var dH = Math.hypot(p.x - holdDest[0], p.z - holdDest[1]);
         if (dH > 0.45) {
-          tx = holdDest[0]; tz = holdDest[1]; seekDirect = true; SB.state = holdState || "leave-pad";
+          tx = holdDest[0]; tz = holdDest[1]; seekDirect = true; SB.state = holdState || "abort-plank";
         } else {
           holdUntil = -1; holdDest = null;
         }
       }
       if (!(holdUntil > t0)) {
-        if (inSpikeRadius(p.x, p.z) && (spikesUp() || knockOff || safeTimeRemaining() < Math.max(0.2, (SPIKE_HIT_R + 0.35 - nearestSpikePad(p.x, p.z)) / 8))) {
-          var destP = nextSafe();
-          var trialP = dirTo(destP[0], destP[1]);
-          if (!wouldFallKeys(p.x, p.z, trialP, 0.5) && !wouldFallDt(p.x, p.z, trialP, recentStepDt(), 0.5)) {
-            tx = destP[0]; tz = destP[1]; seekDirect = true; SB.state = "leave-pad";
-            holdUntil = t0 + 1.0; holdState = "leave-pad"; holdDest = destP; holdDir = loopDir || 1;
-          }
-        }
         var snClose = false, si2, spos3;
         for (si2 = 0; si2 < enemies.length; si2++) {
           spos3 = enemies[si2].mesh && enemies[si2].mesh.position;
@@ -1919,34 +1913,44 @@
     })();
     followKeys = filterLagKeys(p.x, p.z, followKeys);
     (function () {
-      var moved, keysOn, dest, trial, us, n, dir, s, i, c, np, safe, exitEta;
-      var fi, f, pos, fd, bestF = 99, threat = null, ka, nx, nz, d;
+      var moved, keysOn, dest, trial, us, n, dir, s, i, c, np, nextD, pred, look, away, CROSS = 0.70;
+      var fi, f, pos, fd, bestF = 99, threat = null, nx, nz, emptyK, nowIn, nextIn, unsafe;
+      function predicted(px, pz, keys, t) {
+        nx = px; nz = pz;
+        if (keys.ArrowRight) nx += 8 * t; else if (keys.ArrowLeft) nx -= 8 * t;
+        if (keys.ArrowDown) nz += 8 * t; else if (keys.ArrowUp) nz -= 8 * t;
+        return [nx, nz];
+      }
+      function keysAwayFromPad(px, pz) {
+        var now = nearestSpikePad(px, pz), dirs = [-(loopDir || 1), loopDir || 1], di, ddir, pr, tr;
+        us = ringIndexNear(px, pz); n = RING.length;
+        for (di = 0; di < 2; di++) {
+          ddir = dirs[di];
+          for (s = 0; s < 5; s++) {
+            i = ((us + ddir * [1, 2, 3, 4, 5][s]) % n + n) % n;
+            c = ringCell(i);
+            if (!isPb(c[0], c[1])) continue;
+            tr = axisKeysTo(px, pz, c[0], c[1]);
+            pr = predicted(px, pz, tr, Math.max(0.15, recentStepDt()));
+            if (!isPb(pr[0], pr[1]) || !onOuterLine(pr[0], pr[1])) continue;
+            if (wouldFallKeys(px, pz, tr, 0.4) || wouldFallDt(px, pz, tr, recentStepDt(), 0.4)) continue;
+            if (nearestSpikePad(pr[0], pr[1]) > now + 0.05) return { keys: tr, dest: c };
+          }
+        }
+        return null;
+      }
+      emptyK = { ArrowUp: 0, ArrowDown: 0, ArrowLeft: 0, ArrowRight: 0 };
       moved = lastMoveX == null || Math.hypot(p.x - lastMoveX, p.z - lastMoveZ) > 0.12;
       if (moved) { lastMoveT = t0; lastMoveX = p.x; lastMoveZ = p.z; }
       keysOn = !!(followKeys.ArrowUp || followKeys.ArrowDown || followKeys.ArrowLeft || followKeys.ArrowRight);
       if (!moved && !keysOn && t0 - lastMoveT > 3) {
         dest = ringAlong(p.x, p.z, loopDir || 1);
         trial = axisKeysTo(p.x, p.z, dest.x, dest.z);
-        if (!wouldFallKeys(p.x, p.z, trial, 0.4) && !wouldFallDt(p.x, p.z, trial, recentStepDt(), 0.4)) {
+        pred = predicted(p.x, p.z, trial, 0.15);
+        if (isPb(pred[0], pred[1]) && onOuterLine(pred[0], pred[1]) && nearestSpikePad(pred[0], pred[1]) >= SPIKE_HIT_R &&
+            !wouldFallKeys(p.x, p.z, trial, 0.4) && !wouldFallDt(p.x, p.z, trial, recentStepDt(), 0.4)) {
           followKeys = trial; tx = dest.x; tz = dest.z; SB.state = "watchdog";
           lastMoveT = t0; noodleSince = 0; holdUntil = -1;
-        }
-      }
-      np = nearestSpikePad(p.x, p.z);
-      safe = safeTimeRemaining();
-      exitEta = Math.max(0, (SPIKE_HIT_R + 0.35 - np) / 8);
-      if (np < SPIKE_HIT_R && (spikesUp() || safe < exitEta + 0.08)) {
-        us = ringIndexNear(p.x, p.z); n = RING.length; dir = loopDir || 1; dest = null;
-        for (s = 0; s < 6; s++) {
-          i = ((us + dir * [2, 3, 1, 4, 5, 6][s]) % n + n) % n;
-          c = ringCell(i);
-          if (nearestSpikePad(c[0], c[1]) >= SPIKE_SAFE_R && isPb(c[0], c[1])) { dest = c; break; }
-        }
-        if (dest) {
-          trial = axisKeysTo(p.x, p.z, dest[0], dest[1]);
-          if (!wouldFallKeys(p.x, p.z, trial, 0.4) && !wouldFallDt(p.x, p.z, trial, recentStepDt(), 0.4)) {
-            followKeys = trial; tx = dest[0]; tz = dest[1]; SB.state = "leave-pad";
-          }
         }
       }
       if (k && k.Vc && k.Vc.j) {
@@ -1961,11 +1965,41 @@
       if (threat && onOuterLine(p.x, p.z)) {
         dest = ringAlong(p.x, p.z, loopDir || 1);
         trial = axisKeysTo(p.x, p.z, dest.x, dest.z);
-        if (trial.ArrowRight) nx = p.x + 0.8; else if (trial.ArrowLeft) nx = p.x - 0.8; else nx = p.x;
-        if (trial.ArrowDown) nz = p.z + 0.8; else if (trial.ArrowUp) nz = p.z - 0.8; else nz = p.z;
-        if (isPb(nx, nz) && onOuterLine(nx, nz) && !wouldFallKeys(p.x, p.z, trial, 0.4)) {
+        pred = predicted(p.x, p.z, trial, 0.15);
+        unsafe = spikesUp() || safeTimeRemaining() < CROSS;
+        if (isPb(pred[0], pred[1]) && onOuterLine(pred[0], pred[1]) && !wouldFallKeys(p.x, p.z, trial, 0.4) &&
+            !(unsafe && nearestSpikePad(pred[0], pred[1]) < SPIKE_HIT_R)) {
           followKeys = trial; SB.state = "dodge-orb";
         }
+      }
+      // Conservative 2.5-disk gate. Do not ENTER when up or when the down
+      // window is shorter than a crossing. If already inside during a still-safe
+      // down window, finish the crossing instead of aborting mid-way.
+      look = Math.max(0.15, recentStepDt());
+      pred = predicted(p.x, p.z, followKeys, look);
+      np = nearestSpikePad(p.x, p.z);
+      nextD = nearestSpikePad(pred[0], pred[1]);
+      nowIn = np < SPIKE_HIT_R;
+      nextIn = nextD < SPIKE_HIT_R;
+      unsafe = spikesUp();
+      var safeNow = safeTimeRemaining();
+      function retreatPad() {
+        away = keysAwayFromPad(p.x, p.z);
+        if (away) {
+          followKeys = away.keys; tx = away.dest[0]; tz = away.dest[1]; SB.state = "back-pad";
+        } else {
+          followKeys = emptyK; SB.state = "wait-pad";
+        }
+      }
+      if (unsafe) {
+        if (nowIn) retreatPad();
+        else if (nextIn) { followKeys = emptyK; SB.state = "wait-pad"; }
+      } else if (!nowIn && nextIn && safeNow < CROSS) {
+        followKeys = emptyK; SB.state = "wait-pad";
+      } else if (nowIn) {
+        var goingDeeper = nextD < np - 0.02;
+        var exitEta2 = goingDeeper ? (np + SPIKE_HIT_R) / 8 : Math.max(0, (SPIKE_HIT_R - np) / 8);
+        if (safeNow < exitEta2 + 0.12) retreatPad();
       }
     })();
         followKeys = filterLagKeys(p.x, p.z, followKeys);
