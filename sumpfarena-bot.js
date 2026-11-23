@@ -93,8 +93,8 @@
   var MIN_HOLD = 0.35;
   var ARRIVE = 0.55;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v24";
-  var LS_DUMP = "__SB_dump_v24";
+  var LS_DEATHS = "__SB_deaths_v25";
+  var LS_DUMP = "__SB_dump_v25";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -123,7 +123,7 @@
   }
 
   var SB = {
-    ver: 24,
+    ver: 25,
     gen: GEN,
     bl: 0,
     runs: prevRuns,
@@ -176,6 +176,8 @@
   var waitUntil = 0;
   var guardUntil = 0;
   var checkedMap = false;
+  var committed = false, commitExit = -1, shuttleToB = true, seekDirect = false;
+  SB.hpEvents = [];
 
   function genAlive() {
     try { if (TOP.__SB_GEN !== GEN) return false; } catch (e) { return false; }
@@ -401,7 +403,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v24 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v25 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -513,14 +515,14 @@
     if (Math.abs(pr.cte) > CTE_ON) latKey = lateralTowardCenter(pr.cte, pr.pxp, pr.pzp);
     else if (Math.abs(pr.cte) < CTE_OFF) latKey = null;
     if (latKey) keys[latKey] = 1;
-    if (wouldFallKeys(px, pz, keys, 0.20)) {
+    if (wouldFallKeys(px, pz, keys, 0.28)) {
       if (latKey) { keys[latKey] = 0; latKey = null; }
     }
-    if (wouldFallKeys(px, pz, keys, 0.20)) {
+    if (wouldFallKeys(px, pz, keys, 0.28)) {
       var opp = lateralTowardCenter(pr.cte || 0.3, pr.pxp, pr.pzp);
       if (opp) {
         keys[opp] = 1;
-        if (wouldFallKeys(px, pz, keys, 0.20)) keys[opp] = 0;
+        if (wouldFallKeys(px, pz, keys, 0.28)) keys[opp] = 0;
         else latKey = opp;
       }
     }
@@ -535,6 +537,8 @@
       }
       if (!wouldFallKeys(px, pz, toward, 0.12)) keys = toward;
     }
+    if (keys.ArrowUp && keys.ArrowDown) { keys.ArrowUp = 0; keys.ArrowDown = 0; }
+    if (keys.ArrowLeft && keys.ArrowRight) { keys.ArrowLeft = 0; keys.ArrowRight = 0; }
     return keys;
   }
   function applyFollowKeys(keys, t0) {
@@ -607,7 +611,10 @@
     }
     var tick = spikeTick();
     var fireIn = ((500 - (tick % 1000) + 1000) % 1000) / 400;
-    var onLane = Math.abs(Math.abs(x) - 6) < 1.6 || Math.abs(z - 21) < 1.6;
+    var onLane =
+      (Math.abs(Math.abs(x) - 6) < 1.6 && z > 18) ||
+      (Math.abs(Math.abs(z) - 6) < 1.6 && x > 18) ||
+      (Math.abs(Math.abs(z) - 6) < 1.6 && x < -18);
     return onLane && fireIn < 0.35;
   }
   function spikeWindowHits(enterEta, leaveEta) {
@@ -632,6 +639,127 @@
   function ringCell(i) {
     if (!RING.length) return [24, 0, "path"];
     return RING[(((i % RING.length) + RING.length) % RING.length)];
+  }
+
+
+  function ringTag(i) {
+    var c = ringCell(i);
+    return (c && c[2]) || "path";
+  }
+  function isClusterTag(tag) { return tag === "spike" || tag === "blade"; }
+  function alongDir(start, to, dir) {
+    var n = RING.length;
+    return ((to - start) * dir + n * 8) % n;
+  }
+  function clusterFrom(wi, dir) {
+    var n = RING.length, cells = [], i = ((wi % n) + n) % n, guard = 0;
+    if (!isClusterTag(ringTag(i))) return { indices: [], start: i, exit: i };
+    while (isClusterTag(ringTag(i)) && guard++ < 8) {
+      cells.push(i);
+      i = ((i + dir) % n + n) % n;
+    }
+    return { indices: cells, start: cells[0], exit: i };
+  }
+  function nextCluster(px, pz, wi, dir) {
+    var n = RING.length;
+    var here = ringIndexNear(px, pz);
+    var start = null, j, g, cl, hereOff, path, cx, cz, seq, idx, off, c, first, inside, etaEnter;
+    if (isSpikeCell(px, pz) || isClusterTag(ringTag(here))) {
+      j = here; g = 0;
+      while (isClusterTag(ringTag(((j - dir) % n + n) % n)) && g++ < 8) j = ((j - dir) % n + n) % n;
+      start = j;
+    } else {
+      j = here; g = 0;
+      while (!isClusterTag(ringTag(j)) && g++ < n) j = ((j + dir) % n + n) % n;
+      if (isClusterTag(ringTag(j))) start = j;
+    }
+    cl = start == null ? { indices: [], start: 0, exit: 0 } : clusterFrom(start, dir);
+    if (!cl.indices.length) return { time: 0, cluster: cl, etaEnter: 0, inside: false };
+    hereOff = alongDir(cl.start, here, dir);
+    path = 0; cx = px; cz = pz; seq = [];
+    for (g = 0; g < cl.indices.length; g++) {
+      idx = cl.indices[g];
+      off = alongDir(cl.start, idx, dir);
+      if ((isSpikeCell(px, pz) || isClusterTag(ringTag(here))) && off <= hereOff) continue;
+      seq.push(idx);
+    }
+    seq.push(cl.exit);
+    for (g = 0; g < seq.length; g++) {
+      c = ringCell(seq[g]);
+      path += Math.hypot(c[0] - cx, c[1] - cz);
+      cx = c[0]; cz = c[1];
+    }
+    first = ringCell(cl.start);
+    etaEnter = Math.hypot(first[0] - px, first[1] - pz) / 8;
+    inside = isSpikeCell(px, pz) || isClusterTag(ringTag(here));
+    return { time: path / 8, cluster: cl, etaEnter: etaEnter, inside: inside };
+  }
+  function prePathCells(clusterStart, dir) {
+    var n = RING.length, out = [], j = ((clusterStart - dir) % n + n) % n, g = 0;
+    while (out.length < 2 && g++ < 10) {
+      if (!isClusterTag(ringTag(j))) out.push(j);
+      j = ((j - dir) % n + n) % n;
+    }
+    return out;
+  }
+  function safeTimeRemaining() {
+    var t = spikeTick();
+    if (t >= 900) return 0;
+    return (900 - t) / 400;
+  }
+  function pathSafeTo(px, pz, tx, tz) {
+    var dist = Math.hypot(tx - px, tz - pz), eta = dist / 8, steps, i, x, z;
+    if (isSpikeCell(tx, tz) || isSpikeCell(px, pz)) {
+      if (spikesUp() || safeTimeRemaining() < eta + 0.35) return false;
+    }
+    if (dartThreatAt(tx, tz, eta)) return false;
+    steps = Math.max(2, Math.ceil(dist / 3));
+    for (i = 1; i <= steps; i++) {
+      x = px + (tx - px) * i / steps;
+      z = pz + (tz - pz) * i / steps;
+      if (!isPb(x, z)) return false;
+      if (isSpikeCell(x, z) && (spikesUp() || safeTimeRemaining() < eta * (i / steps) + 0.25)) return false;
+    }
+    return true;
+  }
+  function enemyName(e) {
+    var id = (e && (e.hb != null ? e.hb : e.type));
+    return ({ 0: "snake", 1: "grunt", 2: "shield", 3: "axe", 4: "medusa", 5: "boss", 6: "boss2" })[id] || ("t" + id);
+  }
+  function nearestEnemyInfo(px, pz, enemies) {
+    var best = { type: null, dist: 99 }, i, e, pos, d;
+    for (i = 0; i < (enemies || []).length; i++) {
+      e = enemies[i];
+      pos = e.mesh && e.mesh.position;
+      if (!pos) continue;
+      d = Math.hypot(pos.x - px, pos.z - pz);
+      if (d < best.dist) best = { type: enemyName(e), dist: +d.toFixed(2) };
+    }
+    return best;
+  }
+  function recordHpLoss(before, after, px, pz, enemies) {
+    var ev = {
+      t: Date.now(),
+      hpBefore: before,
+      hpAfter: after,
+      amount: +(before - after).toFixed(2),
+      x: +(+px).toFixed(2),
+      z: +(+pz).toFixed(2),
+      onSpikePad: isSpikeCell(px, pz),
+      spikeUp: spikesUp(),
+      spikeTick: +spikeTick().toFixed(1),
+      spikePhase: spikesUp() ? "up" : ("down in " + safeTimeRemaining().toFixed(2) + "s"),
+      nearestEnemy: nearestEnemyInfo(px, pz, enemies || liveEnemies()),
+      nearestDart: +nearestDart(px, pz).toFixed(2),
+      nearestFireball: +nearestFireball(px, pz).toFixed(2)
+    };
+    ev.cause = ev.onSpikePad && ev.spikeUp ? "spike"
+      : (ev.nearestDart < 2.2 ? "dart"
+        : (ev.nearestFireball < 2.2 ? "fireball"
+          : (ev.nearestEnemy.dist < 4 ? "enemy/" + ev.nearestEnemy.type : "unknown")));
+    SB.hpEvents = (SB.hpEvents || []).concat([ev]).slice(-24);
+    try { console.log("[SB v25 hp] " + ev.hpBefore + "->" + ev.hpAfter + " " + ev.cause + " (" + ev.x + "," + ev.z + ") " + ev.spikePhase + " enm=" + ev.nearestEnemy.type + "@" + ev.nearestEnemy.dist); } catch (e) {}
+    return ev;
   }
 
   function inRound() {
@@ -828,7 +956,7 @@
   }
   function maybeUseBlade(px, pz, enemies) {
     if (!k || !k.i || k.i.Rb < 0) return;
-    if (!(SB.nearest <= 2 && k.i.Y <= 2)) return;
+    if (!(SB.nearest <= 4 && k.i.Y <= 3)) return;
     useZeitklingen();
   }
 
@@ -845,6 +973,12 @@
     var nf = nearestFireball(px, pz);
     if (reason !== "water" && nf < 2.2) reason = "fireball";
     if (reason === "dead" && SB.nearest < 4) reason = "enemy d=" + SB.nearest.toFixed(2);
+    if (SB.hpEvents && SB.hpEvents.length) {
+      var last = SB.hpEvents[SB.hpEvents.length - 1];
+      if (last && Date.now() - last.t < 2000 && last.cause && last.cause !== "unknown") {
+        if (reason === "dead" || reason.indexOf("enemy") === 0) reason = last.cause;
+      }
+    }
     return reason;
   }
   function logDeath(reason) {
@@ -855,11 +989,12 @@
       x: +(+src.x).toFixed(2), z: +(+src.z).toFixed(2), y: +(+src.y || 0).toFixed(2),
       dx: +(src.dx || vel[0] || 0).toFixed(2), dz: +(src.dz || vel[1] || 0).toFixed(2),
       reason: reason || "die", score: SB.score, wave: SB.wave,
-      state: SB.state, wp: SB.wp, t: Date.now()
+      state: SB.state, wp: SB.wp, t: Date.now(),
+      hpEvents: (SB.hpEvents || []).slice(-8)
     };
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
-    try { console.log("[SB v24 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
+    try { console.log("[SB v25 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -935,7 +1070,7 @@
     if (visible(play)) clickEl(play);
   }
   function logPayload() {
-    return { ver: SB.ver, runs: SB.runs, deaths: SB.deaths };
+    return { ver: SB.ver, runs: SB.runs, deaths: SB.deaths, hpEvents: SB.hpEvents || [] };
   }
   function persistLog() {
     var json = JSON.stringify(logPayload());
@@ -947,8 +1082,8 @@
     persistLog();
     try {
       var n = 0, i, r, name, blob, a, doc, url;
-      for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 24) n++; }
-      name = "sumpfarena-v24-log-" + n + ".json";
+      for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 25) n++; }
+      name = "sumpfarena-v25-log-" + n + ".json";
       blob = new Blob([JSON.stringify(logPayload())], { type: "application/json" });
       doc = TOP.document;
       a = doc.createElement("a");
@@ -963,7 +1098,7 @@
   }
   function countVerRuns() {
     var n = 0, i, r;
-    for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 24) n++; }
+    for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 25) n++; }
     return n;
   }
   function endRunCapture() {
@@ -980,7 +1115,7 @@
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
     if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 8000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 24, t: now });
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 25, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -1008,6 +1143,8 @@
     stuckSince = 0; waitUntil = 0; guardUntil = 0; reverseUntil = 0; antiT = 0;
     loopDir = 1; onRing = false; holdUntil = 0;
     lastSegA = null; lastSegB = null; runDumped = false; holdYieldUntil = 0; latKey = null;
+    committed = false; commitExit = -1; shuttleToB = true; seekDirect = false;
+    SB.hpEvents = [];
     if (k && k.X) runtimeSelfCheck();
     route = pickStartRoute(p.x, p.z);
     routeI = 0;
@@ -1119,7 +1256,7 @@
       for (bi = 0; bi < bowls.length; bi++) {
         bowl = bowls[bi];
         bd = Math.hypot(bowl.x - p.x, bowl.z - p.z);
-        if (bd < 5 && isPb(bowl.x, bowl.z) && segmentClear(p.x, p.z, bowl.x, bowl.z) && bd < bestBd) {
+        if (bd < 14 && isPb(bowl.x, bowl.z) && pathSafeTo(p.x, p.z, bowl.x, bowl.z) && bd < bestBd) {
           bestBd = bd; bestB = bowl;
         }
       }
@@ -1136,9 +1273,22 @@
     } else if (t0 < holdYieldUntil) {
       SB.state = "yield";
     } else if (ahead) {
-      if (t0 >= reverseUntil && onRing) {
+      var otherTgt = onRing ? ringCell(SB.wi - loopDir) : [p.x, p.z];
+      var otherAhead = enemyAhead(p.x, p.z, otherTgt[0], otherTgt[1], enemies, 5);
+      if (otherAhead && t0 >= reverseUntil && onRing) {
+        var inner2 = innerSafeCell(p.x, p.z, enemies);
+        if (inner2 && pathSafeTo(p.x, p.z, inner2[0], inner2[1])) {
+          tx = inner2[0]; tz = inner2[1];
+          SB.state = "cut-inner";
+        } else {
+          SB.state = "yield";
+          holdYieldUntil = t0 + 0.5;
+        }
+        if (k && k.i && k.i.Rb >= 0 && k.i.Y <= 3) useZeitklingen();
+      } else if (t0 >= reverseUntil && onRing) {
         loopDir *= -1;
         latKey = null;
+        committed = false;
         reverseUntil = t0 + 1.8;
         SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
         tgt = currentTarget();
@@ -1162,26 +1312,95 @@
       SB.state = onRing ? "loop" : "start";
     }
 
-    var onPadNow = isSpikeCell(here[0], here[1]);
-    if (onPadNow && (spikesUp() || spikeWindowHits(0, 0.35))) {
-      if (onRing) SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
-      tgt = currentTarget();
-      tx = tgt[0]; tz = tgt[1];
-    } else if (shouldWaitSpike(p.x, p.z, tx, tz) || dartThreatAt(tx, tz, Math.hypot(tx - p.x, tz - p.z) / 8)) {
-      if (onRing) {
-        var back1 = ringCell(SB.wi - loopDir);
-        var back2 = ringCell(SB.wi - 2 * loopDir);
-        var d1 = Math.hypot(back1[0] - p.x, back1[1] - p.z);
-        if (d1 < 0.7) { tx = back2[0]; tz = back2[1]; }
-        else { tx = back1[0]; tz = back1[1]; }
-        SB.state = shouldWaitSpike(p.x, p.z, currentTarget()[0], currentTarget()[1]) ? "time-spike" : "time-dart";
+    seekDirect = false;
+    if (onRing) {
+      var info = nextCluster(p.x, p.z, SB.wi, loopDir);
+      var onPad = isSpikeCell(here[0], here[1]);
+      var margin = 0.20;
+      var safe = safeTimeRemaining();
+      var hereI = ringIndexNear(p.x, p.z);
+      if (committed) {
+        var exitC = ringCell(commitExit);
+        var past = Math.hypot(exitC[0] - p.x, exitC[1] - p.z) < 1.0 ||
+          (!onPad && !isClusterTag(ringTag(hereI)) && hereI === commitExit) ||
+          (!onPad && !isClusterTag(ringTag(hereI)) &&
+            alongDir(info.cluster.start || 0, hereI, loopDir) >= alongDir(info.cluster.start || 0, commitExit, loopDir));
+        if (past) { committed = false; commitExit = -1; }
+      }
+      var canClearNow = !info.cluster.indices.length || (!spikesUp() && safe >= info.time + margin);
+      if (!committed && info.cluster.indices.length) {
+        var pres = prePathCells(info.cluster.start, loopDir);
+        var iA = pres[0] != null ? pres[0] : ((info.cluster.start - loopDir + RING.length) % RING.length);
+        var iB = pres[1] != null ? pres[1] : iA;
+        var A = ringCell(iA), B = ringCell(iB);
+        var timeToB = Math.hypot(B[0] - p.x, B[1] - p.z) / 8;
+        var nearStage = Math.hypot(B[0] - p.x, B[1] - p.z) < 1.2 || Math.hypot(A[0] - p.x, A[1] - p.z) < 1.2;
+        var clusterFar = info.etaEnter > safe + 0.25;
+        var firstPad = ringCell(info.cluster.start);
+        var lure = false, ei, epos, dPad, dMe, pulseIn;
+        pulseIn = spikesUp() ? 0 : safe;
+        if (pulseIn > 0 && pulseIn <= 1.05) {
+          for (ei = 0; ei < enemies.length; ei++) {
+            epos = enemies[ei].mesh && enemies[ei].mesh.position;
+            if (!epos) continue;
+            if (isSpikeCell(epos.x, epos.z) || isClusterTag(ringTag(ringIndexNear(epos.x, epos.z)))) { lure = true; break; }
+            dPad = Math.hypot(epos.x - firstPad[0], epos.z - firstPad[1]);
+            dMe = Math.hypot(p.x - firstPad[0], p.z - firstPad[1]);
+            if (dPad < 16 && (dPad < dMe + 3 || dPad < 8)) { lure = true; break; }
+          }
+        }
+        if (lure && !info.inside) {
+          tx = B[0]; tz = B[1]; seekDirect = true; SB.state = "lure-spike";
+        } else if (canClearNow) {
+          committed = true; commitExit = info.cluster.exit;
+        } else if (info.inside) {
+          tx = B[0]; tz = B[1]; seekDirect = true; SB.state = "retreat-spike";
+        } else if (clusterFar) {
+          /* keep looping — pad is too far to reach this window */
+        } else if (nearStage) {
+          tx = B[0]; tz = B[1]; seekDirect = true; SB.state = "hold-spike";
+        } else if (!spikesUp() && timeToB + 0.2 < safe) {
+          tx = B[0]; tz = B[1]; seekDirect = true; SB.state = "stage-spike";
+        } else {
+          tx = B[0]; tz = B[1]; seekDirect = true; SB.state = "time-spike";
+        }
+      }
+    }
+    if ((SB.state === "loop" || SB.state === "reverse") && dartThreatAt(tx, tz, Math.hypot(tx - p.x, tz - p.z) / 8)) {
+      var back1 = ringCell(SB.wi - loopDir);
+      tx = back1[0]; tz = back1[1];
+      seekDirect = true;
+      SB.state = "time-dart";
+    }
+
+    // Attack-knockback only behind a trap, and never with a fireball or fast snake nearby.
+    var hasFire = fireballCount() > 0 || nearestFireball(p.x, p.z) < 8;
+    var hasSnake = false, si, epos2;
+    for (si = 0; si < enemies.length; si++) {
+      epos2 = enemies[si].mesh && enemies[si].mesh.position;
+      if (!epos2) continue;
+      if (enemyName(enemies[si]) === "snake" && Math.hypot(epos2.x - p.x, epos2.z - p.z) < 6) hasSnake = true;
+    }
+    if (!hasFire && !hasSnake && (SB.state === "loop" || SB.state === "time-spike" || SB.state === "lure-spike" || SB.state === "yield")) {
+      var aj, apos, ad;
+      for (aj = 0; aj < enemies.length; aj++) {
+        apos = enemies[aj].mesh && enemies[aj].mesh.position;
+        if (!apos) continue;
+        ad = Math.hypot(apos.x - p.x, apos.z - p.z);
+        if (ad > 2.8 || ad < 0.4) continue;
+        if (!isSpikeCell(apos.x, apos.z) && !isSpikeCell((apos.x + p.x) / 2, (apos.z + p.z) / 2)) continue;
+        if (!isSpikeCell(p.x, p.z) && (spikesUp() || safeTimeRemaining() < 0.5)) { pulseAttack(t0); break; }
       }
     }
 
-    lastSegA = onRing ? ringCell(SB.wi - loopDir) : (routeI > 0 && route[routeI - 1] ? route[routeI - 1] : [p.x, p.z]);
+    lastSegA = seekDirect ? [p.x, p.z] : (onRing ? ringCell(SB.wi - loopDir) : (routeI > 0 && route[routeI - 1] ? route[routeI - 1] : [p.x, p.z]));
     lastSegB = [tx, tz];
 
     var followKeys = followCentreline(p.x, p.z, lastSegA[0], lastSegA[1], tx, tz);
+    if (seekDirect) {
+      if (Math.abs(tx - p.x) >= Math.abs(tz - p.z)) { followKeys.ArrowUp = 0; followKeys.ArrowDown = 0; }
+      else { followKeys.ArrowLeft = 0; followKeys.ArrowRight = 0; }
+    }
     applyFollowKeys(followKeys, t0);
     maybeUseBlade(p.x, p.z, enemies);
     SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + tx.toFixed(0) + "," + tz.toFixed(0) + " " + (tgt[2] || "");
@@ -1236,6 +1455,7 @@
       if (!checkedMap && k && k.X) runtimeSelfCheck();
       syncHud();
       var hpNow = SB.hp;
+      if (lastHp > hpNow && lastHp > 0) recordHpLoss(lastHp, hpNow, SB.px, SB.pz, (k && k.ba) ? liveEnemies() : []);
       if ((lastHp > 0 && hpNow <= 0) || (k.i && k.i.la && !deathLogged)) logDeath(classifyDeath(SB.px, SB.pz));
       var p = playerPos();
       var running = inRound();
