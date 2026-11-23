@@ -297,3 +297,50 @@ Sim: 6 trials, cap 7000 s, targetW=36.
 | v37 | 0 | 0 | 0 | **14.67** | 5 | 5 | **3** | **1** | 0 | 0 | **24** |
 
 v37 is **not worse**: 0 water / 0 spike / 0 arrow on all clocks, first ≥18 on every clock (hitch max 24, 1/40 max 21). Mean is slightly below v36 on 1/60 (13.17 vs 14.00) but well above v34, and well above both on 1/40; hitch ties v34’s mean with no water. Stable stays v34 (not re-evaluated here). v37 is the build to test live next for the wave-13 hold-spike shield death.
+
+
+## v38 (wave-35 protocol, v37 + lure-spike fireball)
+
+v37 live (21:50:23–22:21:35 Europe/Zurich, 23 Nov 2026): one real death at **wave 16 / 3890 / 131**, state `lure-spike`, **fireball** at (−15.63, 23.54) walking toward waypoint R41 (−15, 24). Spikes were down; the “spike” tag is the lure target, not the cause. Seven seconds earlier a fireball had already dropped HP 3→1.5 with the orb still visible at **9.5**. Wave 14 had a ~4 min leftover-axe stall (kills stuck at 113). Canvas stable, jitter 0.57 s, 0 water / 0 spike. Full write-up: `sumpfarena-deaths-v37.md`. The v34 live record (wave 21) still stands.
+
+Why the v36/v37 lure patch missed: `fireballCount()` used `k.Vc.active` only (can be 0 while orbs remain in `k.Vc.j`), and the 8-unit gate allowed the orb at 9.5; `dodge-orb` only starts at 4.5.
+
+v38 = v37 plus only:
+
+1. Count live orbs via `eachFireball` (not `k.Vc.active`).
+2. No `lure-spike` start/abort if a live orb exists, an orb is incoming, or nearest < 12. At HP ≤ 3, also abort if a medusa has LoS within reach 13.
+3. `dodge-orb` range 8 only while already in `lure-spike` / `abort-lure` (axe ≤ 3.5 reject kept).
+4. Classifier: `amount >= 2` → axe (logging only).
+
+Leftover-axe hunt was tried and withdrawn (sim wave-6 / moat regressions). `hunt-stall` stays v37 reverse-at-60s. Dump key: `__SB_dump_v38`.
+
+Sim: 6 trials, cap 7000 s, targetW=36, same-run vs v37 (`/tmp/sb-bench38e`). Official published v37 means from `/tmp/sb-bench37` (1/60 13.17 max 18, 1/40 14.67 max 21, hitch 14.67 max 24) are unchanged; this keep decision uses the paired run below, whose v37 1/60 drew a weaker 11.33.
+
+### 1/60
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v37 | 0 | 0 | 0 | 11.33 | 4 | 4 | 0 | 0 | 0 | 0 | 14 |
+| v38 | 0 | 0 | 0 | 11.33 | 4 | 4 | 0 | 0 | 0 | 0 | 14 |
+
+Identical trial-for-trial.
+
+### 1/40
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v37 | 0 | 0 | 0 | **14.33** | 5 | 5 | 2 | 1 | 0 | 0 | **18** |
+| v38 | 0 | 0 | 0 | **14.33** | 5 | 5 | 2 | 1 | 0 | 0 | **18** |
+
+Identical trial-for-trial.
+
+### Hitch 8%
+
+| Ver | Water | Spike | Arrow | Mean | ≥10 | ≥12 | ≥15 | ≥18 | ≥25 | ≥35 | Max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| v37 | 0 | 0 | 0 | **13.33** | 5 | 4 | 4 | 0 | 0 | 0 | 17 |
+| v38 | 0 | 0 | 0 | **13.33** | 5 | 4 | 4 | 0 | 0 | 0 | 17 |
+
+Mean ties. One wave-10 trial died to a medusa (2450 / 43) instead of a shield (2460 / 44); the other five trials match.
+
+v38 is **not worse**: 0 water / 0 spike / 0 arrow on all clocks; 1/60 and 1/40 are identical; hitch mean ties. Stable stays v34 (not re-evaluated here). v38 is the build to test live next for the wave-16 lure-spike fireball death. The wave-14 leftover-axe stall is still open.
