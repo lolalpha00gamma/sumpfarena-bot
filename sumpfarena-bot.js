@@ -13,23 +13,39 @@
   var KEYS = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, " ": 32 };
   var ARROWS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
   var SPIKE_PERIOD = 2.51;
-  var LIMIT = 6.8;
-  var SPIKE_MAX = 7.65;
+  var TARGET = 6.0;
+  var GUARD = 6.3;
   var CENTER = 3;
   var WP = [
-    [7.4, 7.5, 1],
-    [6.6, 0, 0],
-    [7.4, -7.5, 1],
-    [0, -6.6, 0],
-    [-7.4, -7.5, 1],
-    [-6.6, 0, 0],
-    [-7.4, 7.5, 1],
-    [0, 6.6, 0]
+    [5.5, 5.5],
+    [5.5, 0],
+    [5.5, -5.5],
+    [0, -5.5],
+    [-5.5, -5.5],
+    [-5.5, 0],
+    [-5.5, 5.5],
+    [0, 5.5]
   ];
+  var LS_DEATHS = "__SB_deaths_v17";
+
+  function loadDeaths() {
+    try {
+      var raw = TOP.localStorage && TOP.localStorage.getItem(LS_DEATHS);
+      var arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+  }
+
+  function saveDeaths(list) {
+    try {
+      if (TOP.localStorage) TOP.localStorage.setItem(LS_DEATHS, JSON.stringify(list.slice(-80)));
+    } catch (e) {}
+  }
 
   var SB = {
-    ver: 16,
+    ver: 17,
     runs: prevRuns,
+    deaths: loadDeaths(),
     err: "",
     state: "boot",
     n: 0,
@@ -51,11 +67,11 @@
     nearest: 99,
     px: 0,
     pz: 0,
+    py: 0,
     kills: 0,
     runKills: 0,
     shoveUntil: 0,
     lastTrap: null,
-    cal: "cam",
     stuck: 0,
     pk: [],
     stop: stop
@@ -70,7 +86,6 @@
   var cam = null;
   var spikes = [];
   var lastDir = [1, 0];
-  var lastPosSample = null;
   var prevPos = null;
   var vel = [0, 0];
   var moverPrev = {};
@@ -83,7 +98,6 @@
   var hooked = false;
   var lastHud = "";
   var lastHp = 0;
-  var spaceUntil = 0;
   var spacePulseUntil = 0;
   var lastAttackAt = -9;
   var knownEnemies = [];
@@ -94,12 +108,12 @@
   var cycleIdx = 0;
   var blockedDir = 0;
   var lastFocus = 0;
-  var mapFlip0 = 1;
-  var mapFlip1 = 1;
-  var mapSwap = false;
-  var keyAxis = { ArrowRight: null, ArrowLeft: null, ArrowUp: null, ArrowDown: null };
   var intended = [1, 0];
   var lastScoreNum = 0;
+  var trail = [];
+  var deathLogged = false;
+  var lastAliveAt = 0;
+  var lastAlivePos = null;
 
   function stop() {
     stopped = true;
@@ -191,9 +205,7 @@
     if (!c || !gw) return;
     try { if (c.focus) c.focus(); } catch (e) {}
     var r = c.getBoundingClientRect();
-    var x = r.left + r.width / 2;
-    var y = r.top + r.height / 2;
-    var ev = { bubbles: true, cancelable: true, view: gw, clientX: x, clientY: y, button: 0 };
+    var ev = { bubbles: true, cancelable: true, view: gw, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
     ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (type) {
       try { c.dispatchEvent(new gw.MouseEvent(type, ev)); } catch (e) {}
     });
@@ -238,110 +250,6 @@
     return [v.x, v.y];
   }
 
-  function camAxes(p) {
-    var a = project(p.x + 1, p.z);
-    var b = project(p.x, p.z + 1);
-    var c = project(p.x, p.z);
-    var right = [a[0] - c[0], b[0] - c[0]];
-    var up = [a[1] - c[1], b[1] - c[1]];
-    if (mapSwap) {
-      var tmp = right; right = up; up = tmp;
-    }
-    right = [right[0] * mapFlip0, right[1] * mapFlip0];
-    up = [up[0] * mapFlip1, up[1] * mapFlip1];
-    return { right: right, up: up };
-  }
-
-  function norm2(v) {
-    var L = Math.hypot(v[0], v[1]) || 1;
-    return [v[0] / L, v[1] / L];
-  }
-
-  function worldDirForKey(k, p) {
-    if (keyAxis[k]) return keyAxis[k];
-    var ax = camAxes(p);
-    if (k === "ArrowRight") return norm2(ax.right);
-    if (k === "ArrowLeft") return norm2([-ax.right[0], -ax.right[1]]);
-    if (k === "ArrowUp") return norm2(ax.up);
-    if (k === "ArrowDown") return norm2([-ax.up[0], -ax.up[1]]);
-    return [0, 0];
-  }
-
-  function predictedFromHeld(p) {
-    var sx = 0, sz = 0, n = 0, i, k, d;
-    for (i = 0; i < ARROWS.length; i++) {
-      k = ARROWS[i];
-      if (!down[k]) continue;
-      d = worldDirForKey(k, p);
-      sx += d[0];
-      sz += d[1];
-      n++;
-    }
-    if (!n) return null;
-    return norm2([sx, sz]);
-  }
-
-  function applyMapping(flip0, flip1, swap, vx, vz, p) {
-    var a = project(p.x + 1, p.z);
-    var b = project(p.x, p.z + 1);
-    var c = project(p.x, p.z);
-    var r = [a[0] - c[0], b[0] - c[0]];
-    var u = [a[1] - c[1], b[1] - c[1]];
-    if (swap) { var tmp = r; r = u; u = tmp; }
-    r = [r[0] * flip0, r[1] * flip0];
-    u = [u[0] * flip1, u[1] * flip1];
-    return { s0: vx * r[0] + vz * r[1], s1: vx * u[0] + vz * u[1], r: r, u: u };
-  }
-
-  function autoCalibrate(p, t0) {
-    var spd = Math.hypot(vel[0], vel[1]);
-    if (spd < 1.2) return;
-    var heldN = 0, i, k;
-    for (i = 0; i < ARROWS.length; i++) if (down[ARROWS[i]]) heldN++;
-    if (heldN === 1) {
-      for (i = 0; i < ARROWS.length; i++) {
-        k = ARROWS[i];
-        if (down[k]) keyAxis[k] = norm2(vel);
-      }
-    }
-    var pred = predictedFromHeld(p);
-    if (!pred) return;
-    var align = pred[0] * vel[0] / spd + pred[1] * vel[1] / spd;
-    if (align >= 0.55) {
-      SB.cal = "ok";
-      return;
-    }
-    var best = { sc: align, f0: mapFlip0, f1: mapFlip1, sw: mapSwap };
-    var opts = [
-      [1, 1, false], [1, -1, false], [-1, 1, false], [-1, -1, false],
-      [1, 1, true], [1, -1, true], [-1, 1, true], [-1, -1, true]
-    ];
-    var o, m, pr, sc;
-    var ivx = intended[0], ivz = intended[1];
-    for (i = 0; i < opts.length; i++) {
-      o = opts[i];
-      m = applyMapping(o[0], o[1], o[2], ivx, ivz, p);
-      pr = [0, 0];
-      if (down.ArrowRight) { pr[0] += m.r[0]; pr[1] += m.r[1]; }
-      if (down.ArrowLeft) { pr[0] -= m.r[0]; pr[1] -= m.r[1]; }
-      if (down.ArrowUp) { pr[0] += m.u[0]; pr[1] += m.u[1]; }
-      if (down.ArrowDown) { pr[0] -= m.u[0]; pr[1] -= m.u[1]; }
-      if (Math.hypot(pr[0], pr[1]) < 0.01) continue;
-      pr = norm2(pr);
-      sc = pr[0] * vel[0] / spd + pr[1] * vel[1] / spd;
-      if (sc > best.sc) best = { sc: sc, f0: o[0], f1: o[1], sw: o[2] };
-    }
-    if (best.sc > align + 0.25 && best.sc > 0.35) {
-      mapFlip0 = best.f0;
-      mapFlip1 = best.f1;
-      mapSwap = best.sw;
-      keyAxis = { ArrowRight: null, ArrowLeft: null, ArrowUp: null, ArrowDown: null };
-      SB.cal = (mapSwap ? "sw" : "") + (mapFlip0 < 0 ? "x" : "") + (mapFlip1 < 0 ? "y" : "") || "fix";
-    } else if (align < -0.2) {
-      SB.cal = "bad";
-    }
-  }
-
   function holdDir(vx, vz, t0, p, forceTwo) {
     var len = Math.hypot(vx, vz);
     if (len < 0.05) {
@@ -357,88 +265,57 @@
     intended[1] = vz;
 
     var want = { ArrowRight: false, ArrowLeft: false, ArrowUp: false, ArrowDown: false };
-    var usedMeasured = 0, i, k, d, dots = [];
-    for (i = 0; i < ARROWS.length; i++) {
-      k = ARROWS[i];
-      if (keyAxis[k]) {
-        usedMeasured++;
-        d = keyAxis[k];
-        dots.push([k, d[0] * vx + d[1] * vz]);
-      }
-    }
-    if (usedMeasured >= 2) {
-      dots.sort(function (a, b) { return b[1] - a[1]; });
-      if (dots[0][1] > 0.15) want[dots[0][0]] = true;
-      if (dots[1] && dots[1][1] > 0.35) want[dots[1][0]] = true;
-    }
-    if (!want.ArrowRight && !want.ArrowLeft && !want.ArrowUp && !want.ArrowDown) {
-      if (p && cam) {
-        var m = applyMapping(mapFlip0, mapFlip1, mapSwap, vx, vz, p);
-        var s0 = m.s0, s1 = m.s1;
-        var mx = Math.max(Math.abs(s0), Math.abs(s1)) || 1;
-        var thr = forceTwo ? 0.15 : 0.38;
-        want.ArrowRight = s0 > thr * mx;
-        want.ArrowLeft = s0 < -thr * mx;
-        want.ArrowUp = s1 > thr * mx;
-        want.ArrowDown = s1 < -thr * mx;
-      } else {
-        want.ArrowRight = vx > 0.38;
-        want.ArrowLeft = vx < -0.38;
-        want.ArrowUp = vz < -0.38;
-        want.ArrowDown = vz > 0.38;
-      }
-    }
-
-    var held = 0;
-    for (k in want) if (want[k]) held++;
-    if (held === 0) {
-      var bestK = "ArrowRight", bestV = -99, v;
-      if (p && cam) {
-        var mm = applyMapping(mapFlip0, mapFlip1, mapSwap, vx, vz, p);
+    if (p && cam && T) {
+      var a = project(p.x + 1, p.z);
+      var b = project(p.x, p.z + 1);
+      var c = project(p.x, p.z);
+      var s0 = vx * (a[0] - c[0]) + vz * (b[0] - c[0]);
+      var s1 = vx * (a[1] - c[1]) + vz * (b[1] - c[1]);
+      var m = Math.max(Math.abs(s0), Math.abs(s1)) || 1;
+      var thr = forceTwo ? 0.15 : 0.38;
+      want.ArrowRight = s0 > thr * m;
+      want.ArrowLeft = s0 < -thr * m;
+      want.ArrowUp = s1 > thr * m;
+      want.ArrowDown = s1 < -thr * m;
+      var held = 0, k;
+      for (k in want) if (want[k]) held++;
+      if (held === 0 || (forceTwo && held < 2)) {
         var scores = [
-          ["ArrowRight", mm.s0],
-          ["ArrowLeft", -mm.s0],
-          ["ArrowUp", mm.s1],
-          ["ArrowDown", -mm.s1]
+          ["ArrowRight", s0],
+          ["ArrowLeft", -s0],
+          ["ArrowUp", s1],
+          ["ArrowDown", -s1]
         ];
-        scores.sort(function (a, b) { return b[1] - a[1]; });
+        scores.sort(function (x, y) { return y[1] - x[1]; });
         want[scores[0][0]] = true;
-        if (forceTwo) want[scores[1][0]] = true;
-      } else {
-        want.ArrowRight = true;
+        if (forceTwo || held === 0) want[scores[1][0]] = want[scores[1][0]] || forceTwo || held === 0;
+        if (held === 0) want[scores[0][0]] = true;
+      } else if (held > 2) {
+        var sc2 = [
+          ["ArrowRight", s0],
+          ["ArrowLeft", -s0],
+          ["ArrowUp", s1],
+          ["ArrowDown", -s1]
+        ];
+        sc2.sort(function (x, y) { return y[1] - x[1]; });
+        want = { ArrowRight: false, ArrowLeft: false, ArrowUp: false, ArrowDown: false };
+        want[sc2[0][0]] = true;
+        want[sc2[1][0]] = true;
       }
-    } else if (held > 2) {
-      var sc2 = [];
-      for (i = 0; i < ARROWS.length; i++) {
-        k = ARROWS[i];
-        d = worldDirForKey(k, p || { x: 0, z: 0 });
-        sc2.push([k, d[0] * vx + d[1] * vz]);
-      }
-      sc2.sort(function (a, b) { return b[1] - a[1]; });
-      want = { ArrowRight: false, ArrowLeft: false, ArrowUp: false, ArrowDown: false };
-      want[sc2[0][0]] = true;
-      want[sc2[1][0]] = true;
-    } else if (forceTwo && held === 1 && p && cam) {
-      var mm2 = applyMapping(mapFlip0, mapFlip1, mapSwap, vx, vz, p);
-      var sc3 = [
-        ["ArrowRight", mm2.s0],
-        ["ArrowLeft", -mm2.s0],
-        ["ArrowUp", mm2.s1],
-        ["ArrowDown", -mm2.s1]
-      ];
-      sc3.sort(function (a, b) { return b[1] - a[1]; });
-      want[sc3[0][0]] = true;
-      want[sc3[1][0]] = true;
+    } else {
+      want.ArrowRight = vx > 0.38;
+      want.ArrowLeft = vx < -0.38;
+      want.ArrowUp = vz < -0.38;
+      want.ArrowDown = vz > 0.38;
+      if (!want.ArrowRight && !want.ArrowLeft && !want.ArrowUp && !want.ArrowDown) want.ArrowRight = true;
     }
 
+    var k;
     for (k in want) if (want[k]) key(k, true);
     for (k in want) if (!want[k]) key(k, false);
 
-    if (t0 < spacePulseUntil) {
-      key(" ", true, t0 - lastAttackAt < 0.05);
-    } else {
-      key(" ", false);
-    }
+    if (t0 < spacePulseUntil) key(" ", true, t0 - lastAttackAt < 0.05);
+    else key(" ", false);
     SB.attack = t0 < spacePulseUntil;
   }
 
@@ -454,16 +331,44 @@
     return Math.abs(x) < CENTER && Math.abs(z) < CENTER;
   }
 
-  function inSpikeCorner(x, z) {
-    return Math.min(Math.abs(x), Math.abs(z)) >= 4.5 && Math.max(Math.abs(x), Math.abs(z)) <= SPIKE_MAX;
+  function beyondGuard(x, z) {
+    return Math.abs(x) > GUARD || Math.abs(z) > GUARD;
+  }
+
+  function inBlockedZone(x, z) {
+    var i, d, s;
+    for (i = 0; i < SB.deaths.length; i++) {
+      s = SB.deaths[i];
+      if (s && typeof s.x === "number") {
+        d = Math.hypot(x - s.x, z - s.z);
+        if (d < 1.0) return s;
+      }
+    }
+    return null;
   }
 
   function allowedPos(x, z) {
-    var ax = Math.abs(x), az = Math.abs(z);
-    var mp = Math.max(ax, az);
-    if (mp <= LIMIT) return true;
-    if (inSpikeCorner(x, z)) return true;
-    return false;
+    if (Math.abs(x) > TARGET || Math.abs(z) > TARGET) return false;
+    if (inBlockedZone(x, z)) return false;
+    return true;
+  }
+
+  function clampTarget(x, z) {
+    var ax = Math.max(-TARGET, Math.min(TARGET, x));
+    var az = Math.max(-TARGET, Math.min(TARGET, z));
+    if (!inBlockedZone(ax, az)) return [ax, az];
+    var best = [0, 0], bestD = 1e9, i, a, nx, nz, d;
+    for (i = 0; i < 16; i++) {
+      a = (i / 16) * Math.PI * 2;
+      nx = ax + Math.cos(a) * 1.15;
+      nz = az + Math.sin(a) * 1.15;
+      nx = Math.max(-TARGET, Math.min(TARGET, nx));
+      nz = Math.max(-TARGET, Math.min(TARGET, nz));
+      if (inBlockedZone(nx, nz)) continue;
+      d = Math.hypot(nx - x, nz - z);
+      if (d < bestD) { bestD = d; best = [nx, nz]; }
+    }
+    return best;
   }
 
   function clampStep(px, pz, vx, vz) {
@@ -473,7 +378,10 @@
     var step = 0.85;
     var nx = px + vx * step, nz = pz + vz * step;
     if (allowedPos(nx, nz) && !(inCenter(nx, nz) && !inCenter(px, pz))) return [vx, vz];
-    var inward = norm2([-px, -pz]);
+    var inward = (function () {
+      var L = Math.hypot(-px, -pz) || 1;
+      return [-px / L, -pz / L];
+    })();
     if (allowedPos(px + inward[0] * step, pz + inward[1] * step)) return inward;
     var i, a, c, s, rx, rz;
     for (i = 1; i <= 14; i++) {
@@ -490,22 +398,54 @@
   }
 
   function nearestLoopWP(px, pz) {
-    var best = 1, bestD = 1e9, i, d;
+    var best = 1, bestD = 1e9, i, d, t;
     for (i = 0; i < WP.length; i++) {
-      if (WP[i][2]) continue;
-      d = Math.hypot(WP[i][0] - px, WP[i][1] - pz);
+      t = clampTarget(WP[i][0], WP[i][1]);
+      d = Math.hypot(t[0] - px, t[1] - pz);
       if (d < bestD) { bestD = d; best = i; }
     }
     return best;
   }
 
-  function closestWP(px, pz) {
-    var best = 0, bestD = 1e9, i, d;
-    for (i = 0; i < WP.length; i++) {
-      d = Math.hypot(WP[i][0] - px, WP[i][1] - pz);
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    return best;
+  function recordTrail(t0, p) {
+    trail.push({
+      t: t0,
+      x: +p.x,
+      z: +p.z,
+      y: +p.y,
+      vx: vel[0],
+      vz: vel[1],
+      dx: lastDir[0],
+      dz: lastDir[1]
+    });
+    while (trail.length && t0 - trail[0].t > 2.05) trail.shift();
+    lastAliveAt = t0;
+    lastAlivePos = { t: t0, x: +p.x, z: +p.z, y: +p.y, dx: lastDir[0], dz: lastDir[1], vx: vel[0], vz: vel[1] };
+  }
+
+  function logDeath(reason) {
+    if (deathLogged) return;
+    deathLogged = true;
+    var src = lastAlivePos || (trail.length ? trail[trail.length - 1] : null);
+    if (!src) return;
+    var rec = {
+      x: +src.x.toFixed(2),
+      z: +src.z.toFixed(2),
+      y: +(+src.y || 0).toFixed(2),
+      dx: +(src.dx || 0).toFixed(2),
+      dz: +(src.dz || 0).toFixed(2),
+      vx: +(src.vx || 0).toFixed(2),
+      vz: +(src.vz || 0).toFixed(2),
+      reason: reason || "die",
+      score: SB.score,
+      wave: SB.wave,
+      t: Date.now(),
+      trail: trail.slice(-8).map(function (p) {
+        return [+p.x.toFixed(1), +p.z.toFixed(1), +p.y.toFixed(2)];
+      })
+    };
+    SB.deaths.push(rec);
+    saveDeaths(SB.deaths);
   }
 
   function ensureOverlay() {
@@ -516,18 +456,23 @@
     if (overlay && overlay.parentNode) return;
     overlay = doc.createElement("div");
     overlay.id = "__sb_overlay";
-    overlay.style.cssText = "position:fixed;top:8px;right:8px;z-index:2147483647;min-width:230px;max-width:340px;max-height:50vh;overflow:auto;background:rgba(8,12,10,.88);color:#d6ffd0;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;padding:8px 10px;border:1px solid #3a7;border-radius:6px;pointer-events:none;white-space:pre-wrap;";
+    overlay.style.cssText = "position:fixed;top:8px;right:8px;z-index:2147483647;min-width:230px;max-width:340px;max-height:52vh;overflow:auto;background:rgba(8,12,10,.88);color:#d6ffd0;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;padding:8px 10px;border:1px solid #3a7;border-radius:6px;pointer-events:none;white-space:pre-wrap;";
     doc.body.appendChild(overlay);
   }
 
   function renderOverlay() {
     if (!overlay) return;
-    var runs = SB.runs.slice(-10).map(function (r, i) {
-      var n = SB.runs.length - Math.min(SB.runs.length, 10) + i + 1;
+    var runs = SB.runs.slice(-8).map(function (r, i) {
+      var n = SB.runs.length - Math.min(SB.runs.length, 8) + i + 1;
       var k = r.kills != null ? "  k" + r.kills : "";
       return n + ". score " + r.score + "  wave " + r.wave + k;
     }).join("\n");
     if (!runs) runs = "(keine Läufe)";
+    var deaths = SB.deaths.slice(-6).map(function (d, i) {
+      return (SB.deaths.length - Math.min(SB.deaths.length, 6) + i + 1) +
+        ". (" + d.x + "," + d.z + ") dir " + d.dx + "," + d.dz + " " + (d.reason || "");
+    }).join("\n");
+    if (!deaths) deaths = "(keine)";
     var html =
       "Sumpf-Arena Bot v" + SB.ver + "\n" +
       "state  " + SB.state + (SB.stuck ? "  STUCK" : "") + "\n" +
@@ -535,11 +480,10 @@
       "spd    " + (SB.vn || 0).toFixed(2) + "   near " + SB.nearest.toFixed(1) + "\n" +
       "HP     " + Math.round(SB.hp * 100) + "%   kills " + SB.runKills + "\n" +
       "wave   " + SB.wave + "   score " + SB.score + "\n" +
-      "enemy  " + SB.enemies + "  fire " + SB.fireballs + "  big " + SB.bigSnakes + "\n" +
-      "atk    " + (SB.attack ? "YES" : "no") + "   cal " + SB.cal + "\n" +
-      "spike  P=" + SB.spikePeriod.toFixed(2) + "s  ok=" + (SB.ok ? "1" : "0") + "\n" +
+      "enemy  " + SB.enemies + "  atk " + (SB.attack ? "YES" : "no") + "\n" +
       (SB.err ? "ERR    " + SB.err + "\n" : "") +
-      "--- Läufe ---\n" + runs;
+      "--- Läufe ---\n" + runs + "\n" +
+      "--- Tode / Wasser ---\n" + deaths;
     if (html !== lastHud) {
       lastHud = html;
       overlay.textContent = html;
@@ -576,6 +520,7 @@
       if (visible(b) && /nochmal/i.test(b.textContent || "")) { again = b; break; }
     }
     if (again) {
+      if (lastHp > 0.001) logDeath("nochmal");
       logRun();
       clickEl(again);
       SB.wave = "1";
@@ -622,7 +567,6 @@
     if (!isNaN(sn) && sn > lastScoreNum) {
       if (lastScoreNum > 0 || sn >= 5) SB.runKills += 1;
       lastScoreNum = sn;
-      SB.kills = (SB.kills || 0);
     } else if (!isNaN(sn) && sn === 0) {
       lastScoreNum = 0;
     }
@@ -642,13 +586,13 @@
     return /ninja|player|hero|char|lloyd|jay|kai|zane|cole|nya/.test(n);
   }
 
-  function findPlayer(es, sc, t0) {
+  function findPlayer(es, sc) {
     var valid = player && player.visible && player.parent === sc && SB.hp > 0;
     if (valid) {
       var mp = Math.max(Math.abs(player.position.x), Math.abs(player.position.z));
       if (mp < 16) return;
     }
-    var i, e, d, nm, atOrigin = [], moving = [], named = [];
+    var i, e, d, nm, atOrigin = [], named = [];
     for (i = 0; i < es.length; i++) {
       e = es[i];
       if (!e.visible) continue;
@@ -657,10 +601,8 @@
       nm = meshName(e);
       if (looksLikePlayerName(nm)) named.push(e);
       if (d < 1.8) atOrigin.push(e);
-      if (prevPos && player && e === player && Math.hypot(vel[0], vel[1]) > 1) moving.push(e);
     }
-    var pick = named[0] || null;
-    if (!pick && SB.hp > 0 && atOrigin.length) pick = atOrigin[0];
+    var pick = named[0] || (SB.hp > 0 && atOrigin[0]) || null;
     if (!pick && valid) return;
     if (!pick && es.length) {
       var best = 2.2, cand = null;
@@ -724,8 +666,7 @@
     }
     var norm = normalEnemySize || (sizes[0] || 1);
     for (i = 0; i < es.length; i++) {
-      e = es[i];
-      if (enemyExtent(e) > norm * 1.55 + 0.15) big++;
+      if (enemyExtent(es[i]) > norm * 1.55 + 0.15) big++;
     }
     var seen = {};
     function consider(obj) {
@@ -749,7 +690,7 @@
         moverPrev[id] = { x: x, z: z, t: t0 };
       }
     }
-    var ch = sc.children, j, k, c, g;
+    var ch = sc.children, j, k, c;
     for (j = 0; j < ch.length; j++) {
       c = ch[j];
       consider(c);
@@ -784,40 +725,21 @@
   }
 
   function loopPath(t0, p, nd, enemiesInside) {
-    var tg = WP[SB.wi % 8];
+    var raw = WP[SB.wi % 8];
+    var tg = clampTarget(raw[0], raw[1]);
     var dg = Math.hypot(tg[0] - p.x, tg[1] - p.z);
     if (dg < 0.85 || t0 - SB.wt > 8) {
-      if (tg[2] && canShove() && dg < 1.6) {
-        SB.shoveUntil = t0 + 0.42;
-        SB.lastTrap = [tg[0], tg[1]];
-      }
       SB.wi++;
       SB.wt = t0;
-      tg = WP[SB.wi % 8];
+      raw = WP[SB.wi % 8];
+      tg = clampTarget(raw[0], raw[1]);
       dg = Math.hypot(tg[0] - p.x, tg[1] - p.z);
     }
-    var ox = tg[0] - p.x, oz = tg[1] - p.z;
-    var vx = ox, vz = oz;
-    SB.ok = true;
+    var vx = tg[0] - p.x, vz = tg[1] - p.z;
     if (enemiesInside) {
       var rad = Math.hypot(p.x, p.z) || 1;
-      vx += (p.x / rad) * 1.6;
-      vz += (p.z / rad) * 1.6;
-    }
-    if (tg[2] && dg < 6 && dg > 2.5 && SB.spikeUpAt > 0) {
-      var speed = Math.max(SB.vn || 6, 4.5);
-      var tc = t0 + dg / speed;
-      var P = SB.spikePeriod;
-      var ph = (tc - SB.spikeUpAt) % P;
-      if (ph < 0) ph += P;
-      var lag = Math.min(nd, 6) / 3.6;
-      var pe = (ph + lag) % P;
-      SB.ok = ph > 0.8 && ph < P - 0.2 && pe < 0.7;
-      if (!SB.ok) {
-        var r = (dg - 4) * 0.3 / dg;
-        vx = -oz / dg + ox * r;
-        vz = ox / dg + oz * r;
-      }
+      vx += (p.x / rad) * 0.8;
+      vz += (p.z / rad) * 0.8;
     }
     return [vx, vz];
   }
@@ -843,26 +765,46 @@
     lastWatchdog = t0;
     releaseAllKeys(true);
     focusCanvas();
-    cycleIdx = (cycleIdx + 1) % 8;
-    var dirs = [
-      [1, 0], [1, 1], [0, 1], [-1, 1],
-      [-1, 0], [-1, -1], [0, -1], [1, -1]
-    ];
     var inward = [-p.x, -p.z];
     if (Math.hypot(inward[0], inward[1]) < 0.2) inward = [1, 0];
-    var pick = (Math.max(Math.abs(p.x), Math.abs(p.z)) > LIMIT - 0.2) ? inward : dirs[cycleIdx];
+    var pick;
+    if (beyondGuard(p.x, p.z) || Math.max(Math.abs(p.x), Math.abs(p.z)) > TARGET - 0.2) {
+      pick = inward;
+    } else {
+      cycleIdx = (cycleIdx + 1) % 4;
+      var tans = [
+        [-p.z, p.x],
+        [p.z, -p.x],
+        inward,
+        [inward[0] - p.z * 0.4, inward[1] + p.x * 0.4]
+      ];
+      pick = tans[cycleIdx];
+    }
     lastDir[0] = pick[0];
     lastDir[1] = pick[1];
-    intended[0] = pick[0];
-    intended[1] = pick[1];
     holdDir(pick[0], pick[1], t0, p, true);
-    Object.keys(down).forEach(function (k) {
-      if (down[k]) dispatchKey(k, true);
-    });
+    Object.keys(down).forEach(function (k) { if (down[k]) dispatchKey(k, true); });
+  }
+
+  function waterGuard(p) {
+    var px = p.x, pz = p.z;
+    var predX = px + vel[0] * 0.3;
+    var predZ = pz + vel[1] * 0.3;
+    if (beyondGuard(px, pz) || beyondGuard(predX, predZ)) {
+      return { dir: [-px, -pz], forceTwo: true, state: "water" };
+    }
+    return null;
   }
 
   function chooseMove(t0, sc, es) {
     var p = player.position;
+    var guard = waterGuard(p);
+    if (guard) {
+      SB.state = guard.state;
+      SB.attack = false;
+      return guard;
+    }
+
     var n = null, nd = 1e9, E = [], inside = 0, i, e, d;
     var behind = 0;
     var fx = lastDir[0], fz = lastDir[1];
@@ -883,7 +825,6 @@
 
     var vx = 0, vz = 0;
     var forceTwo = false;
-    var out = !allowedPos(p.x, p.z);
     var blocking = false;
     if (n && nd < 1.5) {
       var ex = n.position.x - p.x, ez = n.position.z - p.z;
@@ -891,22 +832,15 @@
       if ((ex / el) * fx + (ez / el) * fz > 0.1) blocking = true;
     }
 
-    if (out) {
-      var wp = WP[nearestLoopWP(p.x, p.z)];
-      vx = -p.x * 1.4 + wp[0] * 0.15;
-      vz = -p.z * 1.4 + wp[1] * 0.15;
-      if (Math.hypot(vx, vz) < 0.2) { vx = -p.x; vz = -p.z; }
-      SB.state = "recover";
-      forceTwo = true;
-    } else if (t0 - SB.rs < 1.2 || inCenter(p.x, p.z)) {
-      if (t0 - SB.rs < 0.08) SB.wi = nearestLoopWP(6.6, 0);
-      var tg0 = WP[SB.wi % 8];
+    if (t0 - SB.rs < 1.2 || inCenter(p.x, p.z)) {
+      if (t0 - SB.rs < 0.08) SB.wi = nearestLoopWP(5.5, 0);
+      var tg0 = clampTarget(WP[SB.wi % 8][0], WP[SB.wi % 8][1]);
       if (Math.hypot(p.x, p.z) < 1.0) { vx = 1; vz = 0; }
       else { vx = tg0[0] - p.x; vz = tg0[1] - p.z; }
       SB.state = "start";
-    } else if (t0 < SB.shoveUntil && SB.lastTrap && canShove()) {
+    } else if (t0 < SB.shoveUntil && canShove()) {
       if (n) { vx = n.position.x - p.x; vz = n.position.z - p.z; }
-      else { vx = SB.lastTrap[0] - p.x; vz = SB.lastTrap[1] - p.z; }
+      else { vx = -p.x; vz = -p.z; }
       SB.state = "shove";
       pulseSpace(t0);
     } else {
@@ -926,7 +860,7 @@
       var bx = n.position.x - p.x, bz = n.position.z - p.z;
       vx += -bz * 0.8 - bx * 0.4;
       vz += bx * 0.8 - bz * 0.4;
-      if (SB.state !== "recover") SB.state = "dodge";
+      SB.state = "dodge";
     }
 
     var spd = Math.hypot(vel[0], vel[1]);
@@ -935,10 +869,18 @@
       var turn = (blockedDir % 2 ? 1 : -1) * (0.7 + blockedDir * 0.35);
       var c = Math.cos(turn), s = Math.sin(turn);
       var rx = vx * c - vz * s, rz = vx * s + vz * c;
-      if (out) { rx = -p.x; rz = -p.z; }
       vx = rx; vz = rz;
-      if (SB.state !== "recover") SB.state = "blocked";
+      if (SB.state !== "water") SB.state = "blocked";
     }
+
+    var zone = inBlockedZone(p.x, p.z) || inBlockedZone(p.x + vx, p.z + vz);
+    if (zone) {
+      vx = -p.x + (p.x - zone.x) * 0.6;
+      vz = -p.z + (p.z - zone.z) * 0.6;
+    }
+
+    guard = waterGuard({ x: p.x, z: p.z });
+    if (guard) return guard;
 
     var steered = clampStep(p.x, p.z, vx, vz);
     return { dir: steered, forceTwo: forceTwo };
@@ -963,7 +905,9 @@
     prevPos = null;
     vel = [0, 0];
     stuckSince = 0;
-    SB.wi = nearestLoopWP(6.6, 0);
+    trail = [];
+    deathLogged = false;
+    SB.wi = nearestLoopWP(5.5, 0);
     SB.wt = t0;
     SB.state = "start";
     releaseAllKeys(true);
@@ -997,9 +941,16 @@
       for (i = 0; i < ch.length; i++) {
         if (ch[i].isSkinnedMesh && ch[i].visible) es.push(ch[i]);
       }
-      findPlayer(es, sc, t0);
+      var prevPlayer = player;
+      findPlayer(es, sc);
 
       var hpNow = SB.hp;
+      var playerGone = prevPlayer && (!player || !player.visible || player.parent !== sc);
+      var yDrop = player && prevPos && (player.position.y < prevPos[3] - 1.2 || player.position.y < -1.5);
+      if ((lastHp > 0.05 && hpNow <= 0.001) || playerGone || yDrop) {
+        logDeath(playerGone ? "vanish" : (yDrop ? "y-drop" : "hp0"));
+      }
+
       var inRound = !!(player && player.visible && hpNow > 0.001 && (visible(Q(".healthBar")) || visible(Q(".waveNumber")) || hpNow > 0));
       if (inRound && (player !== SB._lp || (lastHp <= 0.001 && hpNow > 0.02))) {
         SB._lp = player;
@@ -1017,15 +968,16 @@
       var p = player.position;
       SB.px = p.x;
       SB.pz = p.z;
+      SB.py = p.y;
       if (prevPos) {
         var dt = Math.max(0.008, t0 - prevPos[2]);
         vel[0] = (p.x - prevPos[0]) / dt;
         vel[1] = (p.z - prevPos[1]) / dt;
         SB.vn = Math.hypot(vel[0], vel[1]);
       }
-      autoCalibrate(p, t0);
       refreshSpikes(sc);
       updateSpikeTiming(t0);
+      recordTrail(t0, p);
 
       if (t0 - lastFocus > 2.5) {
         lastFocus = t0;
@@ -1036,7 +988,7 @@
       holdDir(mv.dir[0], mv.dir[1], t0, p, mv.forceTwo);
       refreshHeldKeys(t0);
       watchdog(t0, p, true);
-      prevPos = [p.x, p.z, t0];
+      prevPos = [p.x, p.z, t0, p.y];
     } catch (e) {
       SB.err = (e && e.message) || String(e);
     }
