@@ -91,10 +91,10 @@
   ];
   var COS20 = 0.9397;
   var MIN_HOLD = 0.35;
-  var ARRIVE = 0.8;
+  var ARRIVE = 0.55;
   var N4 = [[3, 0], [-3, 0], [0, 3], [0, -3]];
-  var LS_DEATHS = "__SB_deaths_v23";
-  var LS_DUMP = "__SB_dump_v23";
+  var LS_DEATHS = "__SB_deaths_v24";
+  var LS_DUMP = "__SB_dump_v24";
 
   var PLAN_PAIRS = "24,0,24,-3,24,-6,24,-9,24,-12,24,-15,24,-18,24,-21,24,-24,21,-24,18,-24,15,-24,12,-24,9,-24,6,-24,3,-24,0,-24,-3,-24,-6,-24,-9,-24,-12,-24,-15,-24,-18,-24,-21,-24,-24,-24,-24,-21,-24,-18,-24,-15,-24,-12,-24,-9,-24,-6,-24,-3,-24,0,-24,3,-24,6,-24,9,-24,12,-24,15,-24,18,-24,21,-24,24,-21,24,-18,24,-15,24,-12,24,-9,24,-6,24,-3,24,0,24,3,24,6,24,9,24,12,24,15,24,18,24,21,24,24,24,24,21,24,18,24,15,24,12,24,9,24,6,24,3".split(",");
   var PLAN_TAGS = "noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,path,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,path,path,noodle,path,path,path,path,path,path,spike,blade,spike,path,path,path,path,dart,path,noodle,path,dart,path,path,path,path,spike,blade,spike,path,path,path,path,path,path".split(",");
@@ -123,7 +123,7 @@
   }
 
   var SB = {
-    ver: 23,
+    ver: 24,
     gen: GEN,
     bl: 0,
     runs: prevRuns,
@@ -164,7 +164,7 @@
   var lastHud = "", lastHp = 0, lastAttackAt = -9, lastWatchdog = 0, lastKeyRefresh = 0, lastFocus = 0;
   var stuckSince = 0, trail = [], speedHist = [], deathLogged = false, lastAlivePos = null;
   var antiT = 0, antiX = 0, antiZ = 0;
-  var lastSegA = null, lastSegB = null, joinEnd = [24, 0];
+  var lastSegA = null, lastSegB = null, joinEnd = [24, 0], latKey = null;
   var waterSegCount = {}, sessionBlacklist = {}, runDumped = false, holdYieldUntil = 0;
   var prevPos = null, vel = [0, 0], curDir = 0, holdUntil = 0, lastScoreNum = 0;
   var RING = PLAN.slice();
@@ -401,7 +401,7 @@
     lines.push("start east F=" + (pathClear(east) ? "CLEAR" : "BLOCKED"));
     SB.sanity = lines.join(" | ");
     checkedMap = true;
-    try { console.log("[SB v23 sanity]", lines); } catch (e) {}
+    try { console.log("[SB v24 sanity]", lines); } catch (e) {}
   }
 
   function yawTerm() {
@@ -466,6 +466,91 @@
       ARROWS.forEach(function (n) { if (want[n]) dispatchKey(n, true); });
     }
   }
+  var CTE_ON = 0.22, CTE_OFF = 0.12;
+  function projectSeg(px, pz, ax, az, bx, bz) {
+    var dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz) || 1;
+    var ux = dx / L, uz = dz / L;
+    var pxp = -uz, pzp = ux;
+    var t = ((px - ax) * ux + (pz - az) * uz) / L;
+    var tC = t < 0 ? 0 : t > 1 ? 1 : t;
+    var cte = (px - ax) * pxp + (pz - az) * pzp;
+    return { ux: ux, uz: uz, pxp: pxp, pzp: pzp, cte: cte, t: t, remain: (1 - t) * L, cx: ax + ux * L * tC, cz: az + uz * L * tC };
+  }
+  function cardinalAlong(ux, uz) {
+    if (Math.abs(ux) >= Math.abs(uz)) return ux >= 0 ? { ArrowRight: 1 } : { ArrowLeft: 1 };
+    return uz >= 0 ? { ArrowDown: 1 } : { ArrowUp: 1 };
+  }
+  function lateralTowardCenter(cte, pxp, pzp) {
+    if (Math.abs(cte) < CTE_OFF) return null;
+    var vx = -pxp * (cte > 0 ? 1 : cte < 0 ? -1 : 0), vz = -pzp * (cte > 0 ? 1 : cte < 0 ? -1 : 0);
+    if (Math.abs(vx) >= Math.abs(vz)) return vx >= 0 ? "ArrowRight" : "ArrowLeft";
+    return vz >= 0 ? "ArrowDown" : "ArrowUp";
+  }
+  function wouldFallKeys(px, pz, keys, horizon) {
+    var ka = null, up = !!keys.ArrowUp, down = !!keys.ArrowDown, left = !!keys.ArrowLeft, right = !!keys.ArrowRight;
+    if (up && left) ka = 225;
+    else if (up && right) ka = 315;
+    else if (down && left) ka = 125;
+    else if (down && right) ka = 45;
+    else if (up && !down) ka = 270;
+    else if (down && !up) ka = 90;
+    else if (left && !right) ka = 180;
+    else if (right && !left) ka = 0;
+    if (ka == null) return !isPb(px, pz);
+    var d = worldDirFromKa(ka), i, t, spd = (k && k.Ah) || 8;
+    for (i = 1; i <= 10; i++) {
+      t = horizon * i / 10;
+      if (!isPb(px + d[0] * spd * t, pz + d[1] * spd * t)) return true;
+    }
+    return false;
+  }
+  function emptyKeys() { return { ArrowUp: 0, ArrowDown: 0, ArrowLeft: 0, ArrowRight: 0 }; }
+  function followCentreline(px, pz, ax, az, bx, bz) {
+    var pr = projectSeg(px, pz, ax, az, bx, bz);
+    var keys = emptyKeys();
+    var along = cardinalAlong(pr.ux, pr.uz), kname;
+    for (kname in along) if (along[kname]) keys[kname] = 1;
+    if (Math.abs(pr.cte) > CTE_ON) latKey = lateralTowardCenter(pr.cte, pr.pxp, pr.pzp);
+    else if (Math.abs(pr.cte) < CTE_OFF) latKey = null;
+    if (latKey) keys[latKey] = 1;
+    if (wouldFallKeys(px, pz, keys, 0.20)) {
+      if (latKey) { keys[latKey] = 0; latKey = null; }
+    }
+    if (wouldFallKeys(px, pz, keys, 0.20)) {
+      var opp = lateralTowardCenter(pr.cte || 0.3, pr.pxp, pr.pzp);
+      if (opp) {
+        keys[opp] = 1;
+        if (wouldFallKeys(px, pz, keys, 0.20)) keys[opp] = 0;
+        else latKey = opp;
+      }
+    }
+    if (wouldFallKeys(px, pz, keys, 0.12)) {
+      var toward = emptyKeys();
+      if (Math.abs(bx - px) >= Math.abs(bz - pz)) {
+        if (bx - px > 0.08) toward.ArrowRight = 1;
+        else if (bx - px < -0.08) toward.ArrowLeft = 1;
+      } else {
+        if (bz - pz > 0.08) toward.ArrowDown = 1;
+        else if (bz - pz < -0.08) toward.ArrowUp = 1;
+      }
+      if (!wouldFallKeys(px, pz, toward, 0.12)) keys = toward;
+    }
+    return keys;
+  }
+  function applyFollowKeys(keys, t0) {
+    applyGameKeys(keys);
+    var labels = [];
+    if (keys.ArrowUp) labels.push("Up");
+    if (keys.ArrowDown) labels.push("Down");
+    if (keys.ArrowLeft) labels.push("Left");
+    if (keys.ArrowRight) labels.push("Right");
+    SB.keys = labels.join("+") || "none";
+    if (t0 - lastKeyRefresh > 0.20) {
+      lastKeyRefresh = t0;
+      ARROWS.forEach(function (n) { if (keys[n]) dispatchKey(n, true); });
+    }
+  }
+
   function releaseAllKeys(force) {
     applyGameKeys({});
     Object.keys(KEYS).forEach(function (n) { key(n, false, force); });
@@ -774,7 +859,7 @@
     };
     SB.deaths.push(rec);
     saveDeaths(SB.deaths);
-    try { console.log("[SB v23 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
+    try { console.log("[SB v24 death] " + (rec.reason || "") + "/" + (rec.state || "") + " (" + rec.x + "," + rec.z + ") wp=" + (rec.wp || "") + " sc=" + rec.score + " w=" + rec.wave); } catch (e) {}
     if (/^water/i.test(rec.reason || "")) rememberWaterDeath(rec);
   }
   function recordTrail(t0, p) {
@@ -862,8 +947,8 @@
     persistLog();
     try {
       var n = 0, i, r, name, blob, a, doc, url;
-      for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 23) n++; }
-      name = (n && n % 5 === 0) ? ("sumpfarena-v23-log-" + n + ".json") : "sumpfarena-v23-log.json";
+      for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 24) n++; }
+      name = "sumpfarena-v24-log-" + n + ".json";
       blob = new Blob([JSON.stringify(logPayload())], { type: "application/json" });
       doc = TOP.document;
       a = doc.createElement("a");
@@ -876,18 +961,26 @@
       setTimeout(function () { try { URL.revokeObjectURL(url); if (a.parentNode) a.parentNode.removeChild(a); } catch (e) {} }, 1500);
     } catch (e) { SB.err = "dump " + ((e && e.message) || e); }
   }
+  function countVerRuns() {
+    var n = 0, i, r;
+    for (i = 0; i < SB.runs.length; i++) { r = SB.runs[i]; if (r && r.ver === 24) n++; }
+    return n;
+  }
   function endRunCapture() {
     logRun();
     persistLog();
-    if (!runDumped) { downloadLog(); runDumped = true; }
+    if (runDumped) return;
+    runDumped = true;
+    if (countVerRuns() % 10 === 0 && countVerRuns() > 0) downloadLog();
   }
   function logRun() {
     var score = SB.score, wave = SB.wave, kills = SB.runKills;
     if (score === "?" && wave === "?") return;
+    if (String(wave) === "0") return;
     var last = SB.runs[SB.runs.length - 1];
     var now = Date.now();
-    if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 5000) return;
-    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 23, t: now });
+    if (last && String(last.score) === String(score) && String(last.wave) === String(wave) && (now - (last.t || 0)) < 8000) return;
+    SB.runs.push({ score: score, wave: wave, kills: kills, ver: 24, t: now });
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
@@ -914,7 +1007,7 @@
     trail = []; speedHist = [];
     stuckSince = 0; waitUntil = 0; guardUntil = 0; reverseUntil = 0; antiT = 0;
     loopDir = 1; onRing = false; holdUntil = 0;
-    lastSegA = null; lastSegB = null; runDumped = false; holdYieldUntil = 0;
+    lastSegA = null; lastSegB = null; runDumped = false; holdYieldUntil = 0; latKey = null;
     if (k && k.X) runtimeSelfCheck();
     route = pickStartRoute(p.x, p.z);
     routeI = 0;
@@ -993,14 +1086,16 @@
       }
     }
     if (onRing) {
-      var nearI = ringIndexNear(p.x, p.z);
-      var nearC = ringCell(nearI);
-      if (Math.hypot(nearC[0] - p.x, nearC[1] - p.z) > 2.4) {
-        SB.wi = nearI;
-      }
-      var cur = ringCell(SB.wi);
-      if (cur && Math.hypot(cur[0] - p.x, cur[1] - p.z) < ARRIVE) {
-        SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
+      var nR = RING.length, gi, prA, prevA, nextA;
+      for (gi = 0; gi < 6; gi++) {
+        prevA = ringCell(SB.wi - loopDir);
+        nextA = ringCell(SB.wi);
+        prA = projectSeg(p.x, p.z, prevA[0], prevA[1], nextA[0], nextA[1]);
+        if (Math.hypot(nextA[0] - p.x, nextA[1] - p.z) < ARRIVE || prA.t >= 0.92) {
+          SB.wi = ((SB.wi + loopDir) % nR + nR) % nR;
+          continue;
+        }
+        break;
       }
       var fromC = ringCell(SB.wi - loopDir), toC = ringCell(SB.wi);
       if (fromC && toC && isBlockedSeg(fromC[0], fromC[1], toC[0], toC[1])) {
@@ -1010,6 +1105,7 @@
           SB.wi = skipI;
         } else {
           loopDir *= -1;
+          latKey = null;
           SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
         }
       }
@@ -1017,26 +1113,6 @@
 
     var tgt = currentTarget();
     var tx = tgt[0], tz = tgt[1];
-
-    if (safetyBad(p.x, p.z) || !isPb(p.x, p.z)) {
-      guardUntil = t0 + 0.2;
-    }
-    if (t0 < guardUntil) {
-      var safeT = onRing ? ringCell(SB.wi) : (route[Math.min(routeI, Math.max(0, route.length - 1))] || [24, 0]);
-      if (onRing && Math.hypot(ringCell(ringIndexNear(p.x, p.z))[0] - p.x, ringCell(ringIndexNear(p.x, p.z))[1] - p.z) < Math.hypot(safeT[0] - p.x, safeT[1] - p.z) + 0.4) {
-        safeT = ringCell(ringIndexNear(p.x, p.z));
-      }
-      tx = safeT[0]; tz = safeT[1];
-      if (!isPb(tx, tz) || !segmentClear(p.x, p.z, p.x + (tx - p.x) * 0.4, p.z + (tz - p.z) * 0.4)) {
-        var nbs = neighborsF(p.x, p.z), ni, bestN = null, bestNd = 1e9, dd;
-        for (ni = 0; ni < nbs.length; ni++) {
-          dd = Math.hypot(nbs[ni][0] - tx, nbs[ni][1] - tz);
-          if (dd < bestNd) { bestNd = dd; bestN = nbs[ni]; }
-        }
-        if (bestN) { tx = bestN[0]; tz = bestN[1]; }
-      }
-      SB.state = onRing ? "loop" : "start";
-    }
 
     if (k && k.i && k.i.Y < k.i.Hb) {
       var bowls = noodles(), bi, bowl, bd, bestB = null, bestBd = 1e9;
@@ -1062,6 +1138,7 @@
     } else if (ahead) {
       if (t0 >= reverseUntil && onRing) {
         loopDir *= -1;
+        latKey = null;
         reverseUntil = t0 + 1.8;
         SB.wi = ((SB.wi + loopDir) % RING.length + RING.length) % RING.length;
         tgt = currentTarget();
@@ -1104,19 +1181,8 @@
     lastSegA = onRing ? ringCell(SB.wi - loopDir) : (routeI > 0 && route[routeI - 1] ? route[routeI - 1] : [p.x, p.z]);
     lastSegB = [tx, tz];
 
-    var vx = tx - p.x, vz = tz - p.z;
-    var stepLen = Math.hypot(vx, vz) || 1;
-    var nextX = p.x + (vx / stepLen) * 0.8;
-    var nextZ = p.z + (vz / stepLen) * 0.8;
-    if (!isPb(nextX, nextZ) || !segmentClear(p.x, p.z, nextX, nextZ)) {
-      var pull = onRing ? ringCell(ringIndexNear(p.x, p.z)) : here;
-      if (!onRing || (isDoorCell(here[0], here[1]) || !isPb(here[0], here[1]))) pull = ringCell(ringIndexNear(p.x, p.z));
-      vx = pull[0] - p.x;
-      vz = pull[1] - p.z;
-    }
-
-    var idx = chooseKa(vx, vz, t0, false);
-    holdKa(idx, t0);
+    var followKeys = followCentreline(p.x, p.z, lastSegA[0], lastSegA[1], tx, tz);
+    applyFollowKeys(followKeys, t0);
     maybeUseBlade(p.x, p.z, enemies);
     SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + tx.toFixed(0) + "," + tz.toFixed(0) + " " + (tgt[2] || "");
 
@@ -1142,9 +1208,8 @@
             }
           }
           var nt = currentTarget();
-          if (!tryAltDir(p.x, p.z, nt[0], nt[1], t0)) {
-            holdKa(chooseKa(nt[0] - p.x, nt[1] - p.z, t0, true), t0);
-          }
+          latKey = null;
+          applyFollowKeys(followCentreline(p.x, p.z, p.x, p.z, nt[0], nt[1]), t0);
           SB.wp = (onRing ? "R" + SB.wi + " " : "J" + routeI + " ") + "unstick " + nt[0] + "," + nt[1];
         } else SB.stuck = 0;
         antiT = t0; antiX = p.x; antiZ = p.z;
