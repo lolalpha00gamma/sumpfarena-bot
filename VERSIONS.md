@@ -9,9 +9,11 @@ Sim protocol (all numbers below): 11 trials, cap 2400 s, target wave 13, seeds `
 | Variant | Branch | Idea | SHA-pinned jsDelivr |
 |---|---|---|---|
 | v31 (stable) | `main` | Conservative spike gate, dt-aware, pr=0.5, watchdog, noodle abort | See commit `729799f2bfad1dfff43b5dbf155cd5f01b1e8aea` — `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@729799f2bfad1dfff43b5dbf155cd5f01b1e8aea/sumpfarena-bot-v31.js` |
-| v32.1 | `v32.1` | Water-edge margin: never correct toward the inner moat; only pull back when already past the outer lip (`|x|` or `|z| > 24.2`) toward the ring line at 24. Plus all shared v32 fixes below. | _(filled after the main push)_ |
-| v32.2 | `v32.2` | Earlier enemy dodging: larger yield radius (6/7), yield = move-away along the ring instead of standing, no cut-inner with an enemy within ~6.5. Plus all shared v32 fixes. | _(filled after the main push)_ |
-| v32.3 | `v32.3` | Both: water-edge margin and earlier enemy dodging, plus all shared v32 fixes. | _(filled after the main push)_ |
+| v32.1 | `v32.1` | Water-edge margin: never correct toward the inner moat; only pull back when already past the outer lip (`|x|` or `|z| > 24.2`) toward the ring line at 24. Plus all shared v32 fixes below. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.1.js` |
+| v32.2 | `v32.2` | Earlier enemy dodging: larger yield radius (6/7), yield = move-away along the ring instead of standing, no cut-inner with an enemy within ~6.5. Plus all shared v32 fixes. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.2.js` |
+| v32.3 | `v32.3` | Both: water-edge margin and earlier enemy dodging, plus all shared v32 fixes. | `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@97d04b89a1d6c9020fa617a9e9a7823d4e334788/sumpfarena-bot-v32.3.js` |
+
+The v32 files on `main` are at commit `97d04b89a1d6c9020fa617a9e9a7823d4e334788`.
 
 **Recommend testing live first: v32.1.** It is the only variant that beats v31 on mean wave and ≥10/≥12 counts at 1/60 and 1/40, with 0 water / 0 spike / 0 arrow in those benches. Under hitch 8% it is slightly behind v31 (mean 8.45 vs 9.18, ge10 3 vs 4), so **stable stays v31** until hitch is at least as good.
 
