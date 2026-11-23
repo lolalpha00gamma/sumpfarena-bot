@@ -387,3 +387,43 @@ Sim: 6 trials, cap 7000 s, targetW=36, same-run vs v37 and v38 (`/tmp/sb-bench39
 | v39 | 0 | 0 | 0 | **13.50** | 4.54 | 5 | 4 | 2 | 1 | **20** |
 
 v39 is **not clearly worse**: 0 water / 0 spike / 0 arrow on all clocks including the offset-seed batch. Official-clock means are 0.33–0.50 below v37/v38 (well inside trial std ~3); the second 1/60 is 0.17 above (max 20). Combined 1/60 (12 trials) is essentially tied (12.25 vs 12.33). Stable stays v34. v39 is the build to test live next for the wave-8 low-HP lure-into-grunt chain.
+
+
+## v40 (wave-35 protocol, v34 + conservative orb sidestep, danger blades, earlier noodles)
+
+Built from **v34** (live best: wave 21), not from the withdrawn v39-lineage v40 (that one died to wave-6 axes in the newly calibrated sim). Full calibration write-up: `sumpfarena-calibration.md`.
+
+The sim’s remaining mismatches were closed as far as game values allow: axe strike along facing + `Ra` cone (axe DPM 0.99–1.21 → 0.14–0.26), 8-connected `Pa()` pathing, fireball physics confirmed (accel 5, cap 9, hit 1.5). Fireball DPM is still ~0.15 vs live 0.29.
+
+C1 (bait toward the orb + red-on-traps) was withdrawn (1/60 mean 10.67, a spike death). **C2 kept:**
+
+1. Leave a waiting pad when an orb is ≤8 so it does not home onto a stand-still; at ≤3, sidestep the safer ring side only if it clearly beats `loopDir` (never into axe/boss or a hot pad). Keep v34’s 4.5 continue-`loopDir` dodge otherwise.
+2. Wider danger blade use: yellow at HP≤4, green escape at orb <8, danger at HP≤3 / two melee / incoming orb. Red is not used while planted on a trap.
+3. Noodles at **HP≤4** when the path is safe (HP≤2 if threatened). No wave-13 heal cutoff.
+
+Dump key: `__SB_dump_v40`.
+
+Sim: 6 trials, cap 7000 s, targetW=36, same-run vs the v34 brain with the live 4.5 dodge hooked up (`/tmp/sb-calib/official-v40-c2.log`). Calibrated world (facing, 8-connected A*).
+
+### 1/60
+
+| Ver | Water | Spike | Arrow | Mean | std | Max | Min |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v34 | 1 | 0 | 0 | 15.83 | 5.76 | **24** | 7 |
+| v40 | 0 | 0 | 0 | **16.67** | 2.56 | 21 | **14** |
+
+### 1/40
+
+| Ver | Water | Spike | Arrow | Mean | std | Max | Min |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v34 | 0 | 0 | 0 | 14.33 | 3.77 | 17 | 6 |
+| v40 | 0 | 0 | 0 | **14.67** | 4.07 | **19** | 6 |
+
+### Hitch 8%
+
+| Ver | Water | Spike | Arrow | Mean | std | Max | Min |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v34 | 0 | 0 | 0 | 11.83 | 4.14 | 17 | 5 |
+| v40 | 0 | 0 | 0 | **13.00** | 6.73 | **26** | 5 |
+
+3-clock average: v34 14.00, **v40 14.78**. v40 wins every clock, no water/spike, hitch timeout at wave 26. Stable stays v34 (not re-evaluated here). v40 is the build to test live next for fireball chip and earlier healing.
