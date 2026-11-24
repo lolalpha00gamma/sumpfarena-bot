@@ -5581,8 +5581,21 @@ module.exports = { createBrain, createV41Brain, createV42Brain, createV45Brain, 
       return;
     }
     if (finished || deathLogged) return;
-    var play = Q(".entry.level_02 .play");
-    if (visible(play)) clickEl(play);
+    // v52: Kartenwahl wie im Spiel: Hauptmenue-Spielen -> Auswahl (.nav .next = Pfeil rechts)
+    // -> Auswahl-Spielen (.playButton). Giftsumpf = level index 1 (k.level.da.current).
+    var lvCur = (k && k.level && k.level.da) ? k.level.da.current : null;
+    var pickPlay = Q(".playButton");
+    if (visible(pickPlay)) {
+      if (lvCur !== 1) {
+        var pickNext = Q(".nav .next");
+        if (visible(pickNext)) clickEl(pickNext);
+      } else {
+        clickEl(pickPlay);
+      }
+    } else {
+      var mainPlay = Q("button.play.pulse");
+      if (visible(mainPlay)) clickEl(mainPlay);
+    }
   }
   function syncHud() {
     if (k && k.i) { SB.hp = k.i.Y; SB.hpMax = k.i.Hb || 5; SB.blade = k.i.Rb; }
