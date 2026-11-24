@@ -427,3 +427,40 @@ Sim: 6 trials, cap 7000 s, targetW=36, same-run vs the v34 brain with the live 4
 | v40 | 0 | 0 | 0 | **13.00** | 6.73 | **26** | 5 |
 
 3-clock average: v34 14.00, **v40 14.78**. v40 wins every clock, no water/spike, hitch timeout at wave 26. Stable stays v34 (not re-evaluated here). v40 is the build to test live next for fireball chip and earlier healing.
+
+## v41 (wave-35 protocol, v40 + no-yield kite + corner-well lookahead)
+
+Live v39 and v40 both died standing in `yield`. v41 is **v40 exactly**, plus only:
+
+1. Replace `yield` with continuing along the ring using v40 axis-only keys (no CTE laterals). At corners the dest stays on the current 24-rail so the along-ring replacement does not cut through the well.
+2. Bait/sidestep orb dests also stay on the current rail.
+3. Single-instance guard (no-op before GEN / sanity log if a v41 instance is already running).
+4. C4i dt-aware predicted corner-well no-go + closer-rail recover / along-rail fallback (covers hitch-sized steps at corners). Official simple-v41 waters were kite walking an inward-parallel of the south/west rail, then wait-pad coasting on the lip.
+
+Dump key: `__SB_dump_v41`.
+SHA-pinned jsDelivr: `https://cdn.jsdelivr.net/gh/lolalpha00gamma/sumpfarena-bot@3e6b88ed7ad6a9f979d754aee08c3d41bcc9ac5a/sumpfarena-bot-v41.js`
+
+Sim: 6 trials, cap 7000 s, targetW=36, same-run vs v40 (`/tmp/sb-calib/official-v41-c4j-160.log`, `-140.log`, `-hitch.log`).
+
+### 1/60
+
+| Ver | Water | Spike | Arrow | Mean | std | Max | Min |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v40 | 0 | 0 | 0 | 16.67 | 2.56 | 21 | **14** |
+| v41 | 0 | 0 | 0 | **18.50** | 3.69 | **24** | **14** |
+
+### 1/40
+
+| Ver | Water | Spike | Arrow | Mean | std | Max | Min |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v40 | 0 | 0 | 0 | 14.67 | 4.07 | 19 | 6 |
+| v41 | 0 | 0 | 0 | **16.33** | 5.15 | **21** | 6 |
+
+### Hitch 8%
+
+| Ver | Water | Spike | Arrow | Mean | std | Max | Min |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v40 | 0 | 0 | 0 | 13.00 | 6.73 | **26** | 5 |
+| v41 | 0 | 0 | 0 | **15.83** | 5.34 | 24 | 6 |
+
+3-clock average: v40 14.78, **v41 16.89**. 0 water / 0 spike / 0 arrow on all 18 trials. Stable stays v34 (not re-evaluated here). v41 is the live A/B against v40 for the standing-yield deaths.
