@@ -5585,11 +5585,12 @@ module.exports = { createBrain, createV41Brain, createV42Brain, createV45Brain, 
     // -> Auswahl-Spielen (.playButton). Giftsumpf = level index 1 (k.level.da.current).
     var lvCur = (k && k.level && k.level.da) ? k.level.da.current : null;
     var pickPlay = Q(".playButton");
-    if (visible(pickPlay)) {
+    var pickNext = Q(".nav .next");
+    if (visible(pickPlay) || visible(pickNext)) {
       if (lvCur !== 1) {
-        var pickNext = Q(".nav .next");
-        if (visible(pickNext)) clickEl(pickNext);
-      } else {
+        var nowN = Date.now();
+        if (visible(pickNext) && nowN - (SB.nextAt || 0) > 1200) { SB.nextAt = nowN; clickEl(pickNext); }
+      } else if (visible(pickPlay)) {
         clickEl(pickPlay);
       }
     } else {
